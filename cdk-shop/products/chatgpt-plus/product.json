@@ -1,0 +1,38 @@
+{
+  "schema": "taoai-local-product-spec-v1",
+  "purpose": "本地商品资料，不是 Dujiao-Next API 请求体",
+  "slug": "chatgpt-plus",
+  "name": "ChatGPT Plus · 1个月",
+  "store_name": "TaoAi",
+  "currency": "CNY",
+  "price_minor_units": 13900,
+  "fulfillment": "cdk",
+  "redemption_url": "https://cdk.edujerry.icu",
+  "image_path": "../../assets/chatgpt-plus-139.png",
+  "description_html_path": "description.html",
+  "customer_service": {
+    "channel": "wechat",
+    "account": "lc07130922",
+    "display_text": "+v : lc07130922"
+  },
+  "after_sales_policy": "GPT官充产品售后质保同步官方，如果出现封号，需自行申诉，官方退款，我们同步退款，收取官方实际退款金额的20%作为手续费。",
+  "important_notice_repetitions": 3,
+  "subscription_duration": {
+    "value": 1,
+    "unit": "month"
+  },
+  "redemption_deadline": null,
+  "refund_fee_percent": 20,
+  "refund_fee_basis": "official_actual_refund_amount",
+  "publication_status": "public_out_of_stock",
+  "published_product_id": null,
+  "real_payments_enabled": false,
+  "production_stock_count": 0,
+  "test_stock": {
+    "count": 10,
+    "csv_path": "../../testing/chatgpt-plus-test-cdks.csv",
+    "must_use_isolated_test_product": true,
+    "redeemable": false
+  },
+  "public_url": "https://shop.edujerry.icu/products/chatgpt-plus-1-month"
+}

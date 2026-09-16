@@ -1,0 +1,24 @@
+{
+  "schema": "taoai-local-store-spec-v1",
+  "purpose": "本地店铺资料，不是 Dujiao-Next API 请求体",
+  "name": "TaoAi",
+  "url": "https://shop.edujerry.icu",
+  "redemption_url": "https://cdk.edujerry.icu",
+  "customer_service": {
+    "channel": "wechat",
+    "account": "lc07130922",
+    "display_text": "+v : lc07130922"
+  },
+  "after_sales_policy": "GPT官充产品售后质保同步官方，如果出现封号，需自行申诉，官方退款，我们同步退款，收取官方实际退款金额的20%作为手续费。",
+  "dns_provider": "Cloudflare",
+  "expected_server_ipv4": "216.167.7.10",
+  "payment": {
+    "available_method": "personal_alipay_static_qr_only",
+    "configured_provider": null,
+    "automatic_payment_confirmation_enabled": false
+  },
+  "smtp_configured": false,
+  "deployment_status": "online_display_only",
+  "deployed_url": "https://shop.edujerry.icu",
+  "real_payments_enabled": false
+}

@@ -1,0 +1,40 @@
+# Production secrets and runtime configuration
+.private/
+.env
+.env.*
+config.yml
+compose.yaml
+postgres.env
+redis.conf
+admin-access.json
+
+# Runtime data and backups
+backups/
+releases/
+runtime/
+uploads/
+logs/
+db/
+*.db
+*.sqlite
+*.sqlite3
+
+# Card inventory and local test data
+testing/
+*card-secret*
+*card_secrets*
+*test-cdks*
+
+# Local dependencies and build outputs
+app/.git/
+**/node_modules/
+**/dist/
+**/coverage/
+**/.cache/
+__pycache__/
+*.pyc
+
+# IDE and operating system files
+.DS_Store
+.idea/
+.vscode/
