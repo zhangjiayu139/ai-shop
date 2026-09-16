@@ -1,0 +1,55 @@
+services:
+  cdk:
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+    image: cdk-recharge:local
+    container_name: cdk-recharge
+    restart: unless-stopped
+    volumes:
+      - cdk_data:/app/data
+    env_file:
+      - .env.local
+    environment:
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 8080
+      SERVER_MODE: release
+      DB_PATH: /app/data/cdk_recharge.db
+      WEB_DIR: /app/web
+      INSTALL_MODE: wizard
+      TRUSTED_PROXIES: 172.16.0.0/12
+    command:
+      - /bin/sh
+      - -c
+      - |
+        if [ ! -s /app/data/.jwt_secret ]; then
+          umask 077
+          head -c 32 /dev/urandom | od -An -tx1 | tr -d '[:space:]' > /app/data/.jwt_secret
+        fi
+        export JWT_SECRET="$$(cat /app/data/.jwt_secret)"
+        exec /app/cdk-recharge
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: cdk-caddy
+    restart: unless-stopped
+    command: ["caddy", "reverse-proxy", "--from", ":80", "--to", "cdk:8080"]
+    ports:
+      - "127.0.0.1:8081:80"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      cdk:
+        condition: service_healthy
+
+volumes:
+  cdk_data:
+  caddy_data:
+  caddy_config:
