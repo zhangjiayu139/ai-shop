@@ -4,15 +4,20 @@
 
 **Goal:** 建设一个可导出 CDK 给 Dujiao-Next、通过私网 MaDao 调用 HeroSMS/5SIM、仅在收到短信后核销权益的一次性 OpenAI/Codex 接码系统。
 
-**Architecture:** 新建 Go API/Worker 与 Vue 3 前端，PostgreSQL 保存 CDK、兑换状态和成本账，Redis 提供限流和短锁。MaDao 以独立容器运行在私有网络中，业务 Worker 主动轮询 MaDao，不使用其无持久化重试的回调。
+**Architecture:** 新建 Go API/Worker 与 Vue 3 前端；生产环境复用现有 PostgreSQL 15、Redis 7 和 Caddy，但使用独立数据库/账号、独立 Redis DB/前缀和受控 Caddy 路由。MaDao 以独立容器运行在不发布端口的 provider 网络中，业务 Worker 主动轮询 MaDao，不使用其无持久化重试的回调。
 
-**Tech Stack:** Go 1.24、Chi、pgx v5、Redis、PostgreSQL 16、Vue 3、TypeScript、Vite、Vitest、Playwright、Docker Compose、MaDao Docker image。
+**Tech Stack:** Go 1.24、Chi、pgx v5、Redis 7、PostgreSQL 15、Vue 3、TypeScript、Vite、Vitest、Playwright、Docker Compose、MaDao Docker image。
 
 ## Global Constraints
 
 - 项目根目录固定为 `/Users/zhangjiayu/Desktop/project/study/ai/ai-shop/codex-sms-cdk`。
 - V1 只支持 SKU `OPENAI_OTP_SINGLE`，不实现租号、续费、余额和任意服务选择。
 - Dujiao-Next 只通过人工导入 CDK CSV 对接，不修改其代码和数据库。
+- 生产复用 `taoai-shop-postgres`、`taoai-shop-redis`、`gpt-cdk-caddy`；本项目 Compose 禁止定义或重建 PostgreSQL、Redis、Caddy。
+- PostgreSQL 使用独立数据库/角色 `codex_sms_cdk`，角色连接上限 10；API 连接池最大 6、Worker 最大 4。
+- Redis 固定使用 DB 2 和 `smscdk:` 前缀；每个键必须有 TTL，禁止 `FLUSHDB`、`FLUSHALL` 和无前缀批量删除。
+- Redis DB 只提供逻辑命名空间，不视为权限隔离；MaDao 不加入 `taoai-shop_backend`。Redis 不可用时，取号、兑换和限流相关写接口 fail closed 返回 503，查询接口从 PostgreSQL 降级读取。
+- API/Worker 通过现有内部网络 `taoai-shop_backend` 访问 PostgreSQL/Redis；API 通过 `taoai_shop_front` 接入现有 Caddy。
 - MaDao 只允许私有 Docker 网络访问，禁止将 `7822` 映射到公网。
 - CDK 仅在收到目标短信后由 `RESERVED` 变为 `USED`。
 - 每枚 CDK 24 小时最多购买 5 个上游号码；每个兑换同一时间最多一个活跃上游订单。
@@ -21,6 +26,20 @@
 - CDK 和会话令牌只存 HMAC 指纹；手机号、短信正文、验证码使用 AES-256-GCM 加密。
 - 一次性短信正文和验证码在收到后 24 小时清除。
 - 全部功能按 TDD 实现，每个任务形成独立可验证提交。
+
+---
+
+## Schedule and Cost Baseline
+
+- 第 1 周：Task 0–2，完成供应商 PoC、项目骨架、PostgreSQL 15 兼容迁移和加密边界。
+- 第 2 周：Task 3，完成 CDK 批次、一次性导出、原子预留和管理认证。
+- 第 3 周：Task 4–6，完成 MaDao 契约、幂等取号、轮询、换号、核销和对账。
+- 第 4 周：Task 7 和 Task 8 的部署准备，完成手机端、最小管理端、共享基础设施脚本与监控。
+- 第 5 周：Task 8 的恢复演练、100 并发压测、真实路线回归、48 小时灰度和发布。
+- 供应商波动缓冲：额外预留 1 周，不压缩安全、退款和真实收码验证。
+- 开发工作量：25–35 人日，预算 ¥4.5万–9万元。
+- 增量基础设施：约 ¥0–200/月；复用现有 PostgreSQL、Redis、Caddy 和服务器，费用仅预留给异地备份、监控和流量。
+- 共享基础设施预检不通过是发布阻断项；此时先扩容或拆分服务，不能通过降低验收门槛继续上线。
 
 ---
 
@@ -55,8 +74,11 @@ codex-sms-cdk/
 ├── web/src/views/AdminBatchesView.vue    # 批次生成与导出页
 ├── web/src/api/client.ts                 # 前端 API client
 ├── web/src/stores/redemption.ts          # 兑换状态与轮询
-├── deploy/docker-compose.yml             # api/worker/db/redis/madao/caddy
-├── deploy/Caddyfile                       # TLS、Header、限流前置配置
+├── deploy/docker-compose.yml             # 仅 api/worker/madao，接入现有网络
+├── deploy/caddy-route.caddy               # 合并到现有 Caddyfile 的受控路由片段
+├── deploy/bootstrap-shared-services.sh    # 独立数据库/角色和 Redis DB 预检
+├── deploy/verify-shared-infra.sh          # 部署前后共享基础设施只读验收
+├── deploy/backup-codex-sms.sh             # 独立数据库备份与保留策略
 ├── scripts/configure-madao.sh            # 创建 openai-production 路由
 ├── docs/vendor-poc-report.md              # HeroSMS/5SIM 真实路线准入记录
 ├── docs/vendor-poc-results.csv            # 逐次价格、到达、退款和通过结果
@@ -152,14 +174,23 @@ Expected: `go.mod` 存在，`go list ./...` 返回成功。
 ```go
 func TestLoadRejectsMissingSecrets(t *testing.T) {
     t.Setenv("DATABASE_URL", "postgres://app:app@db/app")
+    t.Setenv("REDIS_ADDR", "redis:6379")
+    t.Setenv("REDIS_DB", "2")
+    t.Setenv("REDIS_PREFIX", "smscdk:")
     t.Setenv("CDK_HMAC_KEY", "")
+    t.Setenv("SESSION_HMAC_KEY", strings.Repeat("b", 64))
+    t.Setenv("FIELD_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString(make([]byte, 32)))
+    t.Setenv("MADAO_BASE_URL", "http://madao:7822")
+    t.Setenv("MADAO_HTTP_SECRET", "secret")
     _, err := Load()
     require.ErrorContains(t, err, "CDK_HMAC_KEY")
 }
 
 func TestLoadAcceptsProductionConfig(t *testing.T) {
-    t.Setenv("DATABASE_URL", "postgres://app:app@db/app")
-    t.Setenv("REDIS_ADDR", "redis:6379")
+    t.Setenv("DATABASE_URL", "postgres://codex_sms_cdk:secret@taoai-shop-postgres/codex_sms_cdk")
+    t.Setenv("REDIS_ADDR", "taoai-shop-redis:6379")
+    t.Setenv("REDIS_DB", "2")
+    t.Setenv("REDIS_PREFIX", "smscdk:")
     t.Setenv("CDK_HMAC_KEY", strings.Repeat("a", 64))
     t.Setenv("SESSION_HMAC_KEY", strings.Repeat("b", 64))
     t.Setenv("FIELD_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString(make([]byte, 32)))
@@ -168,6 +199,8 @@ func TestLoadAcceptsProductionConfig(t *testing.T) {
     cfg, err := Load()
     require.NoError(t, err)
     assert.Equal(t, "openai-production", cfg.MaDao.RoutingPlanID)
+    assert.Equal(t, 2, cfg.RedisDB)
+    assert.Equal(t, "smscdk:", cfg.RedisPrefix)
 }
 ```
 
@@ -182,6 +215,8 @@ Expected: FAIL，提示 `Load` 未定义。
 type Config struct {
     DatabaseURL string
     RedisAddr string
+    RedisDB int
+    RedisPrefix string
     CDKHMACKey []byte
     SessionHMACKey []byte
     FieldEncryptionKey []byte
@@ -196,6 +231,11 @@ func Load() (Config, error) {
     var c Config
     c.DatabaseURL = os.Getenv("DATABASE_URL")
     c.RedisAddr = os.Getenv("REDIS_ADDR")
+    redisDB, err := strconv.Atoi(os.Getenv("REDIS_DB"))
+    c.RedisDB = redisDB
+    if err != nil || c.RedisDB != 2 { return Config{}, errors.New("REDIS_DB must be 2") }
+    c.RedisPrefix = os.Getenv("REDIS_PREFIX")
+    if c.RedisPrefix != "smscdk:" { return Config{}, errors.New("REDIS_PREFIX must be smscdk:") }
     c.CDKHMACKey = []byte(os.Getenv("CDK_HMAC_KEY"))
     c.SessionHMACKey = []byte(os.Getenv("SESSION_HMAC_KEY"))
     c.MaDao.BaseURL = os.Getenv("MADAO_BASE_URL")
@@ -205,7 +245,7 @@ func Load() (Config, error) {
     if err != nil || len(key) != 32 { return Config{}, errors.New("FIELD_ENCRYPTION_KEY must be base64 encoded 32 bytes") }
     c.FieldEncryptionKey = key
     required := map[string]string{
-        "DATABASE_URL": c.DatabaseURL, "REDIS_ADDR": c.RedisAddr,
+        "DATABASE_URL": c.DatabaseURL, "REDIS_ADDR": c.RedisAddr, "REDIS_PREFIX": c.RedisPrefix,
         "CDK_HMAC_KEY": string(c.CDKHMACKey), "SESSION_HMAC_KEY": string(c.SessionHMACKey),
         "MADAO_BASE_URL": c.MaDao.BaseURL, "MADAO_HTTP_SECRET": c.MaDao.HTTPSecret,
     }
@@ -364,7 +404,7 @@ CREATE TABLE audit_logs (
 ```yaml
 services:
   postgres-test:
-    image: postgres:16-alpine
+    image: postgres:15-alpine
     environment:
       POSTGRES_DB: app
       POSTGRES_USER: app
@@ -375,7 +415,7 @@ services:
       timeout: 3s
       retries: 30
   migrate:
-    image: postgres:16-alpine
+    image: postgres:15-alpine
     depends_on:
       postgres-test:
         condition: service_healthy
@@ -905,9 +945,12 @@ git commit -m "feat: add mobile redemption and cdk admin ui"
 
 **Files:**
 - Create: `codex-sms-cdk/deploy/docker-compose.yml`
-- Create: `codex-sms-cdk/deploy/Caddyfile`
+- Create: `codex-sms-cdk/deploy/caddy-route.caddy`
 - Create: `codex-sms-cdk/deploy/.env.example`
 - Create: `codex-sms-cdk/deploy/docker-compose.restore.yml`
+- Create: `codex-sms-cdk/deploy/bootstrap-shared-services.sh`
+- Create: `codex-sms-cdk/deploy/backup-codex-sms.sh`
+- Create: `codex-sms-cdk/deploy/verify-shared-infra.sh`
 - Create: `codex-sms-cdk/scripts/configure-madao.sh`
 - Create: `codex-sms-cdk/tests/e2e/redemption.spec.ts`
 - Create: `codex-sms-cdk/tests/e2e/fixtures/mock-madao.ts`
@@ -915,59 +958,119 @@ git commit -m "feat: add mobile redemption and cdk admin ui"
 - Modify: `codex-sms-cdk/Makefile`
 
 **Interfaces:**
-- Produces: production containers `api`, `worker`, `postgres`, `redis`, `madao`, `caddy`
+- Consumes: existing containers `taoai-shop-postgres`, `taoai-shop-redis`, `gpt-cdk-caddy`
+- Produces: only new production containers `codex-sms-api`, `codex-sms-worker`, `codex-sms-madao`
 - Produces: `make verify`, `make backup`, `make restore-check`
 
-- [ ] **Step 1: 创建不暴露 MaDao 的 Compose**
+- [ ] **Step 1: 实现共享基础设施只读预检**
+
+`verify-shared-infra.sh` 不修改容器、数据库或网络，只在本机写一份检查快照；逐项检查并在任一门槛不满足时非零退出：
+
+- 宿主机至少 4 CPU、可用内存至少 1.5 GiB、可用磁盘至少 20 GiB。
+- `taoai-shop-postgres`、`taoai-shop-redis`、`gpt-cdk-caddy` 均为 running/healthy。
+- PostgreSQL major version 为 15、`max_connections - count(pg_stat_activity) >= 20`。
+- Redis major version 为 7、内存使用率低于 70%、`aof_last_bgrewrite_status=ok`、`evicted_keys=0`。
+- Docker 网络 `taoai-shop_backend` 和 `taoai_shop_front` 已存在；5432、6379 未发布到宿主机。
+
+Run: `sudo ./deploy/verify-shared-infra.sh`
+Expected: 输出 `SHARED_INFRA_OK`，同时把现有三个容器的 ID、启动时间和健康状态写入 `/opt/codex-sms-cdk/shared-infra.before`，供发布后比对。
+
+- [ ] **Step 2: 创建独立数据库、角色并预检 Redis DB 2**
+
+`bootstrap-shared-services.sh` 从权限为 `0600` 的 `/opt/codex-sms-cdk/secrets.env` 读取 `CODEX_SMS_DB_PASSWORD`，通过 `docker exec taoai-shop-postgres psql` 幂等执行：
+
+```sql
+CREATE ROLE codex_sms_cdk LOGIN PASSWORD :'db_password' CONNECTION LIMIT 10;
+CREATE DATABASE codex_sms_cdk OWNER codex_sms_cdk;
+REVOKE ALL ON DATABASE codex_sms_cdk FROM PUBLIC;
+GRANT CONNECT, TEMPORARY ON DATABASE codex_sms_cdk TO codex_sms_cdk;
+```
+
+脚本必须用 `psql` 变量传入密码，不把密码拼进日志或命令回显。若角色已存在，只核对 `rolconnlimit=10` 和数据库 owner，不覆盖未知密码；不一致时停止并要求人工处理。Redis 预检只能执行：
+
+```bash
+docker exec taoai-shop-redis redis-cli -n 2 SET smscdk:preflight ok EX 60
+docker exec taoai-shop-redis redis-cli -n 2 DEL smscdk:preflight
+```
+
+禁止执行 `FLUSHDB` 或 `FLUSHALL`。随后以新账号运行迁移，并确认不能读取 `taoai_shop` 数据库中的业务表。
+
+- [ ] **Step 3: 创建只包含三个新服务的生产 Compose**
 
 ```yaml
 services:
   api:
     build: ..
-    env_file: .env
-    depends_on: [postgres, redis, madao]
-    networks: [public, private]
+    container_name: codex-sms-api
+    env_file:
+      - .env
+      - /opt/codex-sms-cdk/secrets.env
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1.0
+    networks: [front, shared_data, provider]
   worker:
     build: ..
+    container_name: codex-sms-worker
     command: ["/app/worker"]
-    env_file: .env
-    depends_on: [postgres, redis, madao]
-    networks: [private]
+    env_file:
+      - .env
+      - /opt/codex-sms-cdk/secrets.env
+    restart: unless-stopped
+    mem_limit: 384m
+    cpus: 1.0
+    networks: [shared_data, provider]
   madao:
     image: netcookies/madao-daemon:latest
-    env_file: .env.madao
+    container_name: codex-sms-madao
+    env_file:
+      - .env.madao
+      - /opt/codex-sms-cdk/secrets.env
     volumes: [madao-data:/var/lib/madao]
     expose: ["7822"]
-    networks: [private]
-  postgres:
-    image: postgres:16-alpine
-    volumes: [postgres-data:/var/lib/postgresql/data]
-    networks: [private]
-  redis:
-    image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
-    volumes: [redis-data:/data]
-    networks: [private]
-  caddy:
-    image: caddy:2-alpine
-    ports: ["80:80", "443:443"]
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-    networks: [public]
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1.0
+    networks: [provider]
 networks:
-  public: {}
-  private: {}
+  front:
+    external: true
+    name: taoai_shop_front
+  shared_data:
+    external: true
+    name: taoai-shop_backend
+  provider:
+    name: codex_sms_provider
+    internal: false
 volumes:
   madao-data: {}
-  postgres-data: {}
-  redis-data: {}
-  caddy-data: {}
 ```
 
-该网络不使用 `internal: true`，因为 MaDao 必须访问 HeroSMS/5SIM 公网 API；安全边界依靠“不声明 `ports`”阻止宿主机入站暴露。验收：宿主机执行 `curl http://127.0.0.1:7822/health` 必须连接失败；API 容器内部请求 `http://madao:7822/health` 必须成功；MaDao 容器访问供应商 API 必须成功。
+`.env.example` 固定使用 `taoai-shop-postgres:5432/codex_sms_cdk`、`taoai-shop-redis:6379`、`REDIS_DB=2`、`REDIS_PREFIX=smscdk:` 和 `http://madao:7822`。生产文件中的数据库密码、HMAC key、加密 key 和 MaDao secret 只从 `/opt/codex-sms-cdk/secrets.env` 注入。
 
-- [ ] **Step 2: 创建 MaDao 路由配置脚本**
+Compose 不声明 `ports`，也不声明 PostgreSQL、Redis、Caddy 服务。`provider` 网络保留公网出站能力；安全边界依靠未发布端口阻止宿主机入站。验收：宿主机请求 `127.0.0.1:7822` 连接失败，API 容器请求 `http://madao:7822/health` 成功，MaDao 访问供应商 API 成功。
+
+- [ ] **Step 4: 受控接入现有 Caddy**
+
+`caddy-route.caddy` 是发布模板；发布脚本要求 `SMS_PUBLIC_HOST` 非空并校验为合法主机名，再用 `envsubst '$SMS_PUBLIC_HOST'` 渲染候选站点块，不写死生产域名：
+
+```caddy
+$SMS_PUBLIC_HOST {
+    encode zstd gzip
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "same-origin"
+    }
+    @internal path /metrics /debug/*
+    respond @internal 404
+    reverse_proxy codex-sms-api:8080
+}
+```
+
+发布脚本必须沿用现有商城的安全模式：备份 `/opt/gpt-cdk/Caddyfile`，在 `# BEGIN CODEX-SMS-CDK` 与 `# END CODEX-SMS-CDK` 标记间幂等替换，生成候选文件，在 `gpt-cdk-caddy` 内运行 `caddy validate`；只有验证通过才原子替换并 reload，失败则恢复备份。不得重建或重启 Caddy 容器。
+
+- [ ] **Step 5: 创建 MaDao 路由配置脚本**
 
 脚本使用 Bearer Secret 向 `/api/routing-plans` 写入：
 
@@ -988,7 +1091,7 @@ volumes:
 
 生产前允许根据 PoC 结果更换国家和价格上限，但必须通过配置变更审计，不写死在业务代码中。
 
-- [ ] **Step 3: 增加端到端测试**
+- [ ] **Step 6: 增加端到端测试**
 
 `tests/e2e/fixtures/mock-madao.ts` 启动一个本地 HTTP 测试替身，保存当前 ticket，并提供 `timeoutCurrentTicket()` 与 `deliverCode(code)` 两个仅供 Playwright 调用的方法；`/api/acquire`、`/api/poll`、`/api/routing/replace`、`/api/release` 的 JSON 与 Task 4 契约完全一致。
 
@@ -1008,9 +1111,9 @@ test('no-code replacement keeps cdk usable and successful code consumes it', asy
 })
 ```
 
-- [ ] **Step 4: 建立统一验证命令**
+- [ ] **Step 7: 建立独立备份、恢复演练和统一验证命令**
 
-`deploy/docker-compose.restore.yml` 使用 `postgres:16-alpine` 创建独立 `postgres-restore` 服务，挂载只读 `./backups:/backup`，不得连接生产 PostgreSQL 数据卷。
+`backup-codex-sms.sh` 用 `pg_dump -Fc` 只备份 `codex_sms_cdk` 到 `/opt/codex-sms-cdk/backups`，先写临时文件再原子改名，文件权限 `0600`，原子更新同目录 `latest.dump` 符号链接并保留 14 天。现有商城备份脚本只覆盖 `taoai_shop`，不能复用。`docker-compose.restore.yml` 使用 `postgres:15-alpine` 创建隔离的 `postgres-restore` 服务，挂载只读备份目录，不连接生产网络和数据卷。
 
 ```make
 verify:
@@ -1021,14 +1124,15 @@ verify:
 	docker compose -f deploy/docker-compose.yml config --quiet
 
 backup:
-	docker compose -f deploy/docker-compose.yml exec -T postgres pg_dump -Fc -U app app > backup.dump
+	sudo ./deploy/backup-codex-sms.sh
 
 restore-check:
 	docker compose -f deploy/docker-compose.restore.yml up -d postgres-restore
-	docker compose -f deploy/docker-compose.restore.yml exec -T postgres-restore pg_restore --clean --if-exists -U app -d app /backup/backup.dump
+	docker compose -f deploy/docker-compose.restore.yml exec -T postgres-restore pg_restore --clean --if-exists -U codex_sms_cdk -d codex_sms_cdk /backup/latest.dump
+	docker compose -f deploy/docker-compose.restore.yml exec -T postgres-restore psql -U codex_sms_cdk -d codex_sms_cdk -c 'SELECT count(*) FROM redemptions'
 ```
 
-- [ ] **Step 5: 执行安全和日志验收**
+- [ ] **Step 8: 执行安全、共享资源和日志验收**
 
 Run:
 
@@ -1036,28 +1140,34 @@ Run:
 make verify
 rg -n 'OTP-[A-Z0-9-]{20,}|\+[0-9]{8,}|[0-9]{6}' logs/ tests/output/ || true
 docker compose -f deploy/docker-compose.yml ps
+sudo ./deploy/verify-shared-infra.sh --compare /opt/codex-sms-cdk/shared-infra.before
 ```
 
 Expected:
 
 - 全部测试通过。
 - 脱敏扫描无完整 CDK、手机号、验证码。
-- `api`、`worker`、`postgres`、`redis`、`madao`、`caddy` 全部 healthy/running。
+- 只有 `codex-sms-api`、`codex-sms-worker`、`codex-sms-madao` 三个新容器 healthy/running。
+- 现有 PostgreSQL、Redis、Caddy 的容器 ID、启动时间和健康状态未变化。
 - MaDao 无宿主机公开端口。
+- PostgreSQL `codex_sms_cdk` 角色连接上限为 10，当前连接不超过 9。
+- Redis DB 2 中本系统键全部以 `smscdk:` 开头且均有 TTL；其他 DB 的 keyspace 数量未变化。
+- 宿主机可用内存不低于 1.5 GiB、磁盘使用率低于 80%、Redis 内存低于 70%。
 
-- [ ] **Step 6: 复核供应商准入配置**
+- [ ] **Step 9: 复核供应商准入配置**
 
 按 Task 0 已准入路线各执行 10 次发布前回归，核对 MaDao 返回价格没有超过报告中的 `max_price`，到达率仍不低于 70%，收码后通过率仍不低于 80%；不达标时禁止写入 `openai-production`。
 
-- [ ] **Step 7: 灰度上线**
+- [ ] **Step 10: 灰度上线并分级放量**
 
 1. 导入 20 枚灰度 CDK 到 Dujiao-Next 测试商品。
-2. 限制每天最多 50 次上游购买。
+2. 限制最多 50 个并发等待短信会话、每天最多 50 次上游购买。
 3. 连续观察 48 小时的到达率、成功成本、退款和未知订单。
-4. 未出现重复核销、重复买号或未知订单积压后，将每日额度提高到 500 次。
+4. 使用 Mock MaDao 完成 100 并发压测，API P95 小于 500ms，且 PostgreSQL 总连接低于 70、CDK 角色连接低于 9、Redis 内存低于 70% 后，才把并发上限提高到 100、每日额度提高到 500 次。
 5. 保留上一版本镜像和数据库备份；回滚只切换 API/Worker 镜像，不删除 PostgreSQL、Redis 或 MaDao 数据卷。
+6. 超过 100 并发前必须重新执行容量评估；共享 Redis 使用超过 50% 或出现团队隔离要求时迁移独立 Redis/ACL。
 
-- [ ] **Step 8: 提交**
+- [ ] **Step 11: 提交**
 
 ```bash
 git add deploy scripts tests Makefile README.md
@@ -1070,3 +1180,5 @@ git commit -m "ops: add production deployment and release gates"
 - 占位检查：实施步骤没有未决占位或未定义的后续功能；国家线路允许在 PoC 后通过审计配置调整，但业务接口和状态机固定。
 - 类型一致性：`RedemptionID`、`ProviderOrderID`、`MaDaoTicketID`、`Status` 在 Task 3–8 中保持一致；MaDao 客户端只由 Redemption Service/Worker 调用。
 - 范围检查：没有租号、续费、钱包、任意服务、Dujiao支付回调或自动注册功能。
+- 复用检查：生产只新增 API、Worker、MaDao；PostgreSQL 使用独立库/角色，Redis 使用 DB 2/前缀/TTL，Caddy 采用验证后原子合并，发布前后比对现有容器未被重建或重启。
+- 容量检查：50 并发灰度、100 并发压测门禁、数据库/Redis/主机告警和超过门槛后的拆分条件均有可执行步骤。
