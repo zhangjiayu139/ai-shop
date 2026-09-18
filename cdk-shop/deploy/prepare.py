@@ -46,7 +46,7 @@ cfg['reseller'].update(
     enabled=True,
     main_hosts=['shop.edujerry.icu', 'localhost', '127.0.0.1', '::1'],
     trusted_forwarded_host=False,
-    subdomain_base='',
+    subdomain_base='edujerry.icu',
     self_apply_enabled=True,
     settlement_confirm_days=7,
 )
