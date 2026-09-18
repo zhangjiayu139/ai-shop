@@ -42,6 +42,14 @@ for name in ('redis','queue'):
 cfg['queue']['concurrency']=3
 cfg['email']['enabled']=False
 cfg['cors']['allowed_origins']=['https://shop.edujerry.icu']
+cfg['reseller'].update(
+    enabled=True,
+    main_hosts=['shop.edujerry.icu', 'localhost', '127.0.0.1', '::1'],
+    trusted_forwarded_host=False,
+    subdomain_base='',
+    self_apply_enabled=True,
+    settlement_confirm_days=7,
+)
 cfg['security']['password_policy']['min_length']=12
 cfg['upload']['allowed_types'].remove('image/svg+xml')
 cfg['upload']['allowed_extensions'].remove('.svg')
