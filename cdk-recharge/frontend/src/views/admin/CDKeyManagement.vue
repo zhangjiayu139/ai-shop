@@ -76,6 +76,12 @@
             <el-button size="small" @click="form.count = 100">100</el-button>
             <el-button size="small" @click="form.count = ISSUE_MAX">200</el-button>
           </el-button-group>
+          <span class="text-sm text-muted">付款地区</span>
+          <el-select v-model="form.payment_country" size="small" style="width: 150px">
+            <el-option label="默认(菲律宾)" value="" />
+            <el-option v-for="r in paymentRegions" :key="r.country"
+                       :label="`${regionLabel(r.country)} (${r.currency})`" :value="r.country" />
+          </el-select>
           <el-checkbox v-model="form.funding_confirmed">确认承担兑换资金</el-checkbox>
           <el-button type="primary" :loading="issuing" :disabled="!canIssue" @click="issue">
             {{ issuing ? '购买中…' : `购买 ${form.count} 张 ${planLabel(form.plan)} · $${estimatedTotal}` }}
@@ -83,13 +89,18 @@
         </div>
         <p v-if="!configured" class="text-xs" style="color: var(--err)">请先在「卡台配置」填写 Base 与 sk_</p>
         <p v-else-if="!form.funding_confirmed" class="text-xs text-muted">勾选「确认承担兑换资金」后再购买。实付由本账户承担，服务费从卡台余额扣除。</p>
+        <p v-if="form.payment_country" class="text-xs text-muted">所选地区会影响兑换付款；套餐卡片的垫付金额是默认地区参考，实际金额以卡台为准。</p>
         <div v-if="issueError" class="alert alert-error">{{ issueError }}</div>
         <div v-if="issueOk" class="alert alert-success">{{ issueOk }}</div>
         <div v-if="recentCodes.length" class="rounded-xl bg-soft p-3 space-y-2 border" style="border-color: var(--good)">
           <div class="flex flex-wrap items-center justify-between gap-2">
             <div class="text-sm font-medium" style="color: var(--good)">
               本批 {{ recentCodes.length }} 张
-              <span v-if="recentMeta" class="text-xs text-muted font-normal"> · {{ recentMeta.plan }} · {{ recentMeta.atLabel }}</span>
+              <span v-if="recentMeta" class="text-xs text-muted font-normal">
+                · {{ recentMeta.plan }}
+                · {{ recentMeta.region === null ? '地区待核对（找回）' : recentMeta.region ? regionLabel(recentMeta.region) : '默认(菲律宾)' }}
+                · {{ recentMeta.atLabel }}
+              </span>
             </div>
             <div class="flex gap-1">
               <el-button size="small" type="success" @click="copyAll">复制</el-button>
@@ -304,6 +315,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { authFetch } from '../../lib/api'
 import { dialog } from '../../lib/dialog'
 import { copyToClipboard } from '../../lib/clipboard'
+import { availablePaymentCountry, paymentRegionsFromResponse, type PaymentRegion } from '../../lib/payment-region'
 
 const RECENT_KEY = 'cdk_recent_issued_v1'
 /** 浏览器兜底缓存（历史本机数据）；主存储已改为服务器 SQLite */
@@ -343,12 +355,20 @@ const form = reactive({
   plan: 'plus',
   count: 1,
   funding_confirmed: false,
+  payment_country: '',
 })
+const paymentRegions = ref<PaymentRegion[]>([])
+const REGION_NAMES: Record<string, string> = {
+  PH: '菲律宾', US: '美国', JP: '日本', CL: '智利', EG: '埃及', IN: '印度', KR: '韩国',
+}
+function regionLabel(code: string): string {
+  return REGION_NAMES[code] || code
+}
 const issuing = ref(false)
 const issueError = ref('')
 const issueOk = ref('')
 const recentCodes = ref<string[]>([])
-const recentMeta = ref<{ plan: string; atLabel: string } | null>(null)
+const recentMeta = ref<{ plan: string; atLabel: string; region: string | null } | null>(null)
 
 const rows = ref<any[]>([])
 const total = ref(0)
@@ -1049,8 +1069,8 @@ async function syncFromCardplatform(opts?: { quiet?: boolean; plan?: string; sta
   }
 }
 
-function persistRecent(codes: string[], plan: string) {
-  const payload = { codes, plan, at: Date.now() }
+function persistRecent(codes: string[], plan: string, region: string | null = '') {
+  const payload = { codes, plan, region, at: Date.now() }
   try {
     sessionStorage.setItem(RECENT_KEY, JSON.stringify(payload))
   } catch {
@@ -1058,6 +1078,7 @@ function persistRecent(codes: string[], plan: string) {
   }
   recentMeta.value = {
     plan,
+    region,
     atLabel: new Date(payload.at).toLocaleString(),
   }
 }
@@ -1072,6 +1093,7 @@ function loadPersistedRecent() {
     recentCodes.value = codes
     recentMeta.value = {
       plan: String(o.plan || '—'),
+      region: o.region === null ? null : String(o.region || ''),
       atLabel: o.at ? new Date(o.at).toLocaleString() : '—',
     }
   } catch {
@@ -1139,6 +1161,8 @@ async function loadMeta() {
     if (pr.ok) {
       const d = await pr.json()
       plans.value = d.plans || {}
+      paymentRegions.value = paymentRegionsFromResponse(d.payment_regions)
+      form.payment_country = availablePaymentCountry(form.payment_country, paymentRegions.value)
       // 服务端已按「卡台注册表 ∩ ACC 定价开关」过滤，这里拿到什么就显示什么
       planRegistry.value = d.registry || []
       pricingVersion.value = d.version ?? null
@@ -1149,6 +1173,8 @@ async function loadMeta() {
       // ★取不到实时档位时不要编一份出来★：这里编的清单既不知道卡台开了哪些档，
       // 也不知道 ACC 的开关状态，照着它发码就是在赌。清空 + 上面的报错更诚实。
       plans.value = {}
+      paymentRegions.value = []
+      form.payment_country = ''
       planRegistry.value = []
       priceSource.value = 'unavailable'
     }
@@ -1175,6 +1201,7 @@ async function issue() {
         plan: form.plan,
         count: form.count,
         funding_confirmed: true,
+        payment_country: form.payment_country || '',
       }),
     })
     const d = await r.json().catch(() => ({}))
@@ -1183,7 +1210,7 @@ async function issue() {
       const recCodes = Array.isArray(recovered?.codes) ? recovered.codes.map(extractFullCode).filter(Boolean) : []
       if (recCodes.length) {
         recentCodes.value = recCodes
-        persistRecent(recCodes, form.plan)
+        persistRecent(recCodes, form.plan, null)
         issueOk.value = `发码请求未完成，已从卡台找回 ${recCodes.length} 张完整码。不要再点购买。`
         dialog.toast(issueOk.value, 'warn')
         await loadList()
@@ -1207,7 +1234,7 @@ async function issue() {
     // 浏览器兜底 + 列表以服务器为准
     rememberIssued(issued, form.plan)
     recentCodes.value = codes
-    persistRecent(codes, form.plan)
+    persistRecent(codes, form.plan, form.payment_country)
     issueOpen.value = true
     const shortOnes = codes.filter((c) => !isFullCode(c))
     const storedN = Number(d.stored_count)

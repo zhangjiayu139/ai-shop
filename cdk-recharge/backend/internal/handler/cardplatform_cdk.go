@@ -77,7 +77,8 @@ func CardPlatformPlans(c *gin.Context) {
 		"plans":   m,
 		"base":    cardplatform.LoadConfig().SiteBase,
 		// 展示顺序/文案/性质仍以卡台注册表为准，前端不维护档位清单
-		"registry": sellable,
+		"registry":        sellable,
+		"payment_regions": plans.PaymentRegions,
 	})
 }
 
@@ -92,13 +93,23 @@ func CardPlatformBalance(c *gin.Context) {
 	c.JSON(http.StatusOK, bal)
 }
 
+func issuePrefsWithPaymentCountry(pref cardplatform.IssueCardPref, hasSitePref bool, country string) []cardplatform.IssueCardPref {
+	country = strings.ToUpper(strings.TrimSpace(country))
+	if !hasSitePref && country == "" {
+		return nil
+	}
+	pref.PaymentCountry = country
+	return []cardplatform.IssueCardPref{pref}
+}
+
 // CardPlatformIssueCDKs POST /api/v1/admin/cardplatform/cdks
-// body: { plan, count, funding_confirmed }
+// body: { plan, count, funding_confirmed, payment_country }
 func CardPlatformIssueCDKs(c *gin.Context) {
 	var req struct {
 		Plan             string `json:"plan"`
 		Count            int    `json:"count"`
 		FundingConfirmed bool   `json:"funding_confirmed"`
+		PaymentCountry   string `json:"payment_country"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
@@ -157,10 +168,8 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 		idem = "cdk-issue-" + hex.EncodeToString(b)
 	}
 	// 本站选卡配置 → 发码偏好（跳过未启动卡头；ch1 等历史写法会归一成 one）
-	var issuePrefs []cardplatform.IssueCardPref
-	if pref, ok := issuePrefFromSite(); ok {
-		issuePrefs = append(issuePrefs, pref)
-	}
+	pref, hasSitePref := issuePrefFromSite()
+	issuePrefs := issuePrefsWithPaymentCountry(pref, hasSitePref, req.PaymentCountry)
 	var res *cardplatform.IssueCDKResult
 	var err error
 	if len(issuePrefs) > 0 {
@@ -189,8 +198,11 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 	u, _ := c.Get("username")
 	username, _ := u.(string)
 	prefNote := ""
-	if len(issuePrefs) > 0 {
+	if len(issuePrefs) > 0 && (issuePrefs[0].Issuer != "" || issuePrefs[0].SegmentKey != "") {
 		prefNote = " pref=" + issuePrefs[0].Issuer + "/" + issuePrefs[0].SegmentKey
+	}
+	if payCountry := strings.ToUpper(strings.TrimSpace(req.PaymentCountry)); payCountry != "" {
+		prefNote += " region=" + payCountry
 	}
 	db.WriteAudit(username, "cardplatform_issue_cdk", "plan="+plan+" count="+strconv.Itoa(req.Count)+prefNote, c.ClientIP())
 	// 规范化：保证前端总能拿到完整 code 字段；绝不把 code_prefix 填进 code
