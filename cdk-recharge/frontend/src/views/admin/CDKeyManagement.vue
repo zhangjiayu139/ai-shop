@@ -77,7 +77,7 @@
             <el-button size="small" @click="form.count = ISSUE_MAX">200</el-button>
           </el-button-group>
           <span class="text-sm text-muted">付款地区</span>
-          <el-select v-model="form.payment_country" size="small" style="width: 150px">
+          <el-select v-model="form.payment_country" size="small" style="width: 150px" placeholder="默认(菲律宾)">
             <el-option label="默认(菲律宾)" value="" />
             <el-option v-for="r in paymentRegions" :key="r.country"
                        :label="`${regionLabel(r.country)} (${r.currency})`" :value="r.country" />
