@@ -1128,12 +1128,13 @@ const docsDefaultNote = "★这是文档默认兜底价，不是你的账户实�
 // docsDefaultRegistry 未配置 API Key / 卡台不可达时的参考价目表。
 //
 // ★点数必须带上 checkout_amount_minor★：点数的 $0.10 只是我们的服务费，
-// 代理真正要垫的是那笔比索付款（₱565/₱1130/₱2260）。只列服务费的话，
-// 代理会把「一张 ₱2260 的码」当成一毛钱的东西发出去。
+// 代理真正要垫的是那笔比索付款（₱565 … ₱56,500）。只列服务费的话，
+// 代理会把「一张 ₱56,500 的码」当成一毛钱的东西发出去。
 func docsDefaultRegistry() []cardplatform.SellablePlan {
 	return []cardplatform.SellablePlan{
 		{Key: "plus", Label: "Plus", Flow: "direct", SortOrder: 2, ServiceFeeUsdMinor: 100, ServiceFeeUSD: 1},
 		{Key: "pro_5x", Label: "Pro 5x", Flow: "direct", SortOrder: 3, ServiceFeeUsdMinor: 500, ServiceFeeUSD: 5},
+		{Key: "pro_50x", Label: "Pro 50x", Flow: "direct", SortOrder: 5, ServiceFeeUsdMinor: 1000, ServiceFeeUSD: 10},
 		{Key: "pro_20x", Label: "Pro", Flow: "plus_upgrade", SortOrder: 4, ServiceFeeUsdMinor: 1000, ServiceFeeUSD: 10},
 		{Key: "credit250", Label: "Codex 点数 250", Flow: "credit", SortOrder: 5, IsCredit: true,
 			RequiresActiveSubscription: true, ServiceFeeUsdMinor: 10, ServiceFeeUSD: 0.1,
@@ -1144,6 +1145,15 @@ func docsDefaultRegistry() []cardplatform.SellablePlan {
 		{Key: "credit1000", Label: "Codex 点数 1000", Flow: "credit", SortOrder: 7, IsCredit: true,
 			RequiresActiveSubscription: true, ServiceFeeUsdMinor: 10, ServiceFeeUSD: 0.1,
 			CheckoutCurrency: "PHP", CheckoutAmountMinor: 226000},
+		{Key: "credit2500", Label: "Codex 点数 2500", Flow: "credit", SortOrder: 8, IsCredit: true,
+			RequiresActiveSubscription: true, ServiceFeeUsdMinor: 15, ServiceFeeUSD: 0.15,
+			CheckoutCurrency: "PHP", CheckoutAmountMinor: 565000},
+		{Key: "credit5000", Label: "Codex 点数 5000", Flow: "credit", SortOrder: 9, IsCredit: true,
+			RequiresActiveSubscription: true, ServiceFeeUsdMinor: 15, ServiceFeeUSD: 0.15,
+			CheckoutCurrency: "PHP", CheckoutAmountMinor: 1130000},
+		{Key: "credit25000", Label: "Codex 点数 25000", Flow: "credit", SortOrder: 10, IsCredit: true,
+			RequiresActiveSubscription: true, ServiceFeeUsdMinor: 15, ServiceFeeUSD: 0.15,
+			CheckoutCurrency: "PHP", CheckoutAmountMinor: 5650000},
 	}
 }
 

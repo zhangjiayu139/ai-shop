@@ -14,6 +14,7 @@ function resetPreviousRedemption(mode) {
     'step', 'busy', 'error', 'code', 'previewInfo', 'redemptionToken', 'preflightToken',
     'sessionRaw', 'email', 'password', 'resultBody', 'resultStatus', 'resultStage',
     'resultMessage', 'resultEmail', 'resultCardLastFour', 'timeline', 'polling',
+    'recoveringSubscription', 'recoveryPending',
   ].map(key => [key, { value: 'previous-redemption' }]))
   state.credMode = { value: mode }
   state.sessionRaw.value = '{"sessionToken":"test-only-placeholder"}'
@@ -25,6 +26,7 @@ function resetPreviousRedemption(mode) {
   runInNewContext(`${handler}\nresetAll()`, {
     ...state,
     flowVersion: 0,
+    preflightSequence: 0,
     pollVersion: 0,
     pollTimer: 123,
     clearInterval: () => { stoppedPolling = true },

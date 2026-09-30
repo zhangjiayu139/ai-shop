@@ -194,11 +194,12 @@ describe('three-step recharge', () => {
     expect(w.get('[data-testid="confirm-panel"]').isVisible()).toBe(false)
   })
 
-  it('preserves already-satisfied plan blocking and the delinquency warning', async () => {
+  it('blocks redemption until a delinquent subscription is recovered', async () => {
     request.mockResolvedValueOnce(reply(preview)).mockResolvedValueOnce(reply({ code: 0, data: { ...preflight.data, currentPlan: 'plus', subscription_has_active: true, subscription_is_delinquent: true } }))
     const w = await open(); await fill(w); await validate(w)
     expect(w.get('[data-testid="confirm-redeem"]').attributes('disabled')).toBeDefined()
-    expect(w.text()).toContain('未结清账单')
+    expect(w.text()).toContain('原订阅处于宽限期或欠费续费状态')
+    expect(w.text()).toContain('取消原订阅并重新检测')
   })
 
   it('keeps Pro 20x renewal redeemable for an existing Pro 20x account', async () => {
@@ -227,11 +228,12 @@ describe('three-step recharge', () => {
     expect(w.get('[data-testid="confirm-redeem"]').attributes('disabled')).toBeUndefined()
   })
 
-  it('restores delinquency facts from an existing confirmation checkpoint', async () => {
+  it('restores recovery-required facts from an existing confirmation checkpoint', async () => {
     sessionStorage.setItem('cdk_redeem_progress_v1', JSON.stringify({ step: 3, code: 'DEMO-CDK-001', redemptionToken: 'test-redemption', preflightToken: 'test-preflight', account: { checked: true, email: 'demo@example.invalid', subscriptionIsDelinquent: true }, savedAt: Date.now() }))
     const w = await open()
     expect(w.get('[data-testid="confirm-panel"]').isVisible()).toBe(true)
-    expect(w.text()).toContain('未结清账单')
+    expect(w.text()).toContain('原订阅处于宽限期或欠费续费状态')
+    expect(w.get('[data-testid="confirm-redeem"]').attributes('disabled')).toBeDefined()
   })
 
   it('recovers a previously used CDK without submitting another redemption', async () => {

@@ -11,10 +11,7 @@ VER="${VER#v}"
 echo "$VER" > "$ROOT/VERSION"
 mkdir -p "$ROOT/dist/web"
 echo "==> go build v$VER (linux/amd64)"
-cd "$ROOT/backend"
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go build -trimpath -ldflags="-s -w -X github.com/tuzi/cdk-recharge-system/internal/handler.BuildVersion=${VER}" \
-  -o "$ROOT/dist/cdk-recharge" ./cmd/server
+bash "$ROOT/scripts/build-linux-backend.sh" "$ROOT/dist/cdk-recharge" "$VER"
 if command -v file >/dev/null 2>&1 && ! file "$ROOT/dist/cdk-recharge" | grep -q "ELF 64-bit.*x86-64"; then
   echo "产物不是 linux/amd64 ELF，拒绝打包：$(file "$ROOT/dist/cdk-recharge")"
   exit 1

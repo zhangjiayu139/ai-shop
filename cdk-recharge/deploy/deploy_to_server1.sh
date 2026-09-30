@@ -16,9 +16,7 @@ else
 fi
 
 echo "==> build backend (linux/amd64)"
-cd "$ROOT/backend"
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go build -ldflags="-s -w" -o "$ROOT/dist/cdk-recharge" ./cmd/server/main.go
+bash "$ROOT/scripts/build-linux-backend.sh" "$ROOT/dist/cdk-recharge"
 if command -v file >/dev/null 2>&1 && ! file "$ROOT/dist/cdk-recharge" | grep -q "ELF 64-bit.*x86-64"; then
   echo "产物不是 linux/amd64 ELF，拒绝上传：$(file "$ROOT/dist/cdk-recharge")"
   exit 1
