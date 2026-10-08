@@ -34,13 +34,13 @@
           </div>
           <div class="recharge-field">
             <div class="credential-heading">
-              <label :for="credMode === 'session' ? 'recharge-session' : 'recharge-email'">{{ t('rechargeHome.credentials') }}</label>
-              <div class="credential-switch" role="group" :aria-label="t('rechargeHome.credentials')">
+              <label :for="credMode === 'session' ? 'recharge-session' : 'recharge-email'">{{ t(isXPremiumPlan(targetPlan) ? 'xPremium.credential' : 'rechargeHome.credentials') }}</label>
+              <div v-if="!isXPremiumPlan(targetPlan)" class="credential-switch" role="group" :aria-label="t('rechargeHome.credentials')">
                 <button type="button" :aria-pressed="credMode === 'session'" :disabled="busy" @click="setCredentialMode('session')">Session</button>
                 <button type="button" data-testid="mailbox-mode" :aria-pressed="credMode === 'mailbox'" :disabled="busy" @click="setCredentialMode('mailbox')">{{ t('rechargeHome.mailbox') }}</button>
               </div>
             </div>
-            <textarea v-if="credMode === 'session'" id="recharge-session" v-model="sessionRaw" class="input session-input" :aria-label="t('rechargeHome.sessionLabel')" :placeholder="t('rechargeHome.sessionPlaceholder')" autocomplete="off" spellcheck="false" :disabled="busy" :aria-invalid="!!error && errorField === 'credential'" aria-describedby="credential-feedback" @input="invalidateVerification(false)" />
+            <textarea v-if="credMode === 'session'" id="recharge-session" v-model="sessionRaw" class="input session-input" :aria-label="t(isXPremiumPlan(targetPlan) ? 'xPremium.credential' : 'rechargeHome.sessionLabel')" :placeholder="t(isXPremiumPlan(targetPlan) ? 'xPremium.placeholder' : 'rechargeHome.sessionPlaceholder')" autocomplete="off" spellcheck="false" :disabled="busy" :aria-invalid="!!error && errorField === 'credential'" aria-describedby="credential-feedback" @input="invalidateVerification(false)" />
             <div v-else class="mailbox-fields">
               <label class="sr-only" for="recharge-email">{{ t('rechargeHome.email') }}</label>
               <input id="recharge-email" v-model="email" type="email" class="input" :placeholder="t('rechargeHome.email')" autocomplete="off" :disabled="busy" :aria-invalid="!!error && errorField === 'credential'" aria-describedby="credential-feedback" @input="invalidateVerification(false)" />
@@ -53,8 +53,8 @@
               <button type="button" class="text-action muted-action" data-testid="clear-credentials" :disabled="busy" @click="clearCredentials">{{ t('rechargeHome.clear') }}</button>
             </div>
             <div v-if="helpOpen" id="credential-help" class="credential-help">
-              <p>{{ t('rechargeHome.help') }}</p>
-              <a href="https://chatgpt.com/api/auth/session" target="_blank" rel="noopener noreferrer" class="app-link">{{ t('rechargeHome.openSession') }} ↗</a>
+              <p>{{ t(isXPremiumPlan(targetPlan) ? 'xPremium.hint' : 'rechargeHome.help') }}</p>
+              <a v-if="!isXPremiumPlan(targetPlan)" href="https://chatgpt.com/api/auth/session" target="_blank" rel="noopener noreferrer" class="app-link">{{ t('rechargeHome.openSession') }} ↗</a>
             </div>
           </div>
           <p class="credential-privacy"><Lock aria-hidden="true" /><span>{{ t('rechargeHome.privacy') }}</span></p>
@@ -249,6 +249,7 @@ import { ArrowRight, Collection, Document, Lock, Search, Tickets } from '@elemen
 import { siteBrand } from '../../theme'
 import { dialog } from '../../lib/dialog'
 import { planLabel, planSatisfied as isSatisfied } from '../../lib/plan'
+import { isXPremiumPlan, xPremiumCredential } from '../../lib/x-premium'
 import { restoreRechargeStep, serializeRechargeStep } from './recharge-progress'
 
 const { t } = useI18n({ useScope: 'global' })
@@ -817,11 +818,16 @@ async function doValidate() {
       return
     }
     errorField.value = 'credential'
+    if (isXPremiumPlan(targetPlan.value) && credMode.value !== 'session') {
+      credMode.value = 'session'
+      error.value = t('xPremium.invalid')
+      return
+    }
     let credential: { mode: 'session'; session: string } | { mode: 'mailbox'; email: string; password: string }
     if (credMode.value === 'session') {
-      const session = extractSession(sessionRaw.value)
+      const session = isXPremiumPlan(targetPlan.value) ? xPremiumCredential(sessionRaw.value) : extractSession(sessionRaw.value)
       if (!session) {
-        error.value = t('rechargeHome.invalidSession')
+        error.value = t(isXPremiumPlan(targetPlan.value) ? 'xPremium.invalid' : 'rechargeHome.invalidSession')
         return
       }
       credential = { mode: 'session', session }

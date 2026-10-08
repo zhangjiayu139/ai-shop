@@ -35,6 +35,11 @@
       </div>
     </div>
 
+    <label class="text-sm">{{ t('xPremium.product') }}
+      <select v-model="directProduct" class="input !w-48" :disabled="issuing || loadingMeta" @change="loadMeta">
+        <option value="gpt">ChatGPT</option><option value="x">X Premium</option>
+      </select>
+    </label>
     <div v-if="metaError" class="alert alert-error">{{ metaError }}</div>
     <el-button v-if="!configured" type="warning" size="small" @click="$router.push('/ops/integration')">
       去配置 API Key
@@ -77,8 +82,9 @@
             <el-button size="small" @click="form.count = ISSUE_MAX">200</el-button>
           </el-button-group>
           <span class="text-sm text-muted">付款地区</span>
-          <el-select v-model="form.payment_country" size="small" style="width: 150px" placeholder="默认(菲律宾)">
-            <el-option label="默认(菲律宾)" value="" />
+          <el-select v-model="form.payment_country" size="small" style="width: 150px"
+                     :placeholder="directProduct === 'x' ? '默认(日本)' : '默认(菲律宾)'">
+            <el-option v-if="directProduct !== 'x'" label="默认(菲律宾)" value="" />
             <el-option v-for="r in paymentRegions" :key="r.country"
                        :label="`${regionLabel(r.country)} (${r.currency})`" :value="r.country" />
           </el-select>
@@ -256,6 +262,11 @@
         <el-table-column prop="plan" label="套餐" width="100">
           <template #default="{ row }">{{ planLabel(row.plan) }}</template>
         </el-table-column>
+        <el-table-column label="区域" min-width="145">
+          <template #default="{ row }">
+            <span :class="row.payment_country == null ? 'text-muted' : ''">{{ cdkRegionLabel(row.payment_country) }}</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="status" label="状态" width="100">
           <template #default="{ row }">
             <el-tag size="small" :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag>
@@ -311,11 +322,14 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { authFetch } from '../../lib/api'
 import { dialog } from '../../lib/dialog'
 import { copyToClipboard } from '../../lib/clipboard'
 import { availablePaymentCountry, paymentRegionsFromResponse, type PaymentRegion } from '../../lib/payment-region'
+
+const { t } = useI18n()
 
 const RECENT_KEY = 'cdk_recent_issued_v1'
 /** 浏览器兜底缓存（历史本机数据）；主存储已改为服务器 SQLite */
@@ -342,6 +356,7 @@ const selectedRows = ref<any[]>([])
 const tableRef = ref<any>(null)
 const issueOpen = ref(false)
 
+const directProduct = ref('gpt')
 const plans = ref<Record<string, any>>({})
 const pricingVersion = ref<number | null>(null)
 const priceSource = ref('—')
@@ -359,10 +374,17 @@ const form = reactive({
 })
 const paymentRegions = ref<PaymentRegion[]>([])
 const REGION_NAMES: Record<string, string> = {
-  PH: '菲律宾', US: '美国', JP: '日本', CL: '智利', EG: '埃及', IN: '印度', KR: '韩国',
+  PH: '菲律宾', US: '美国', JP: '日本', CL: '智利', EG: '埃及', IN: '印度', KR: '韩国', NG: '尼日利亚', TR: '土耳其',
 }
 function regionLabel(code: string): string {
   return REGION_NAMES[code] || code
+}
+function cdkRegionLabel(country: unknown): string {
+  if (country == null) return '待同步'
+  const code = String(country).trim().toUpperCase()
+  if (!code) return '默认（菲律宾）'
+  const name = regionLabel(code)
+  return name === code ? code : `${name} (${code})`
 }
 const issuing = ref(false)
 const issueError = ref('')
@@ -416,7 +438,7 @@ const planCards = computed(() =>
 )
 
 const canIssue = computed(() =>
-  configured.value && form.funding_confirmed && form.count >= 1 && form.count <= ISSUE_MAX && !issuing.value &&
+  configured.value && form.funding_confirmed && form.count >= 1 && form.count <= ISSUE_MAX && !issuing.value && !loadingMeta.value &&
   // 选中的档位必须在可卖清单里：默认值 plus 也可能被卡台/ACC 关掉，
   // 不判的话按钮是亮的、点下去被后端 400 挡回来。
   planKeys.value.includes(form.plan),
@@ -1143,9 +1165,11 @@ async function copyRowCode(row: any) {
 async function loadMeta() {
   loadingMeta.value = true
   metaError.value = ''
+  plans.value = {}
+  planRegistry.value = []
   try {
     const [pr, br, er, sr] = await Promise.all([
-      authFetch('/api/v1/admin/cardplatform/plans'),
+      authFetch(`/api/v1/admin/cardplatform/plans?product=${directProduct.value}`),
       authFetch('/api/v1/admin/cardplatform/balance'),
       authFetch('/api/v1/admin/network/egress'),
       authFetch('/api/v1/admin/settings'),
@@ -1165,6 +1189,7 @@ async function loadMeta() {
       form.payment_country = availablePaymentCountry(form.payment_country, paymentRegions.value)
       // 服务端已按「卡台注册表 ∩ ACC 定价开关」过滤，这里拿到什么就显示什么
       planRegistry.value = d.registry || []
+      if (directProduct.value === 'x' && !form.payment_country) form.payment_country = 'JP'
       pricingVersion.value = d.version ?? null
       priceSource.value = 'live'
     } else {

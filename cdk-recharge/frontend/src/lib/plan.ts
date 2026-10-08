@@ -1,3 +1,4 @@
+import { isXPremiumPlan } from './x-premium'
 // 套餐判定：可读名 + 「账号是否已满足该档」（兑换前的重复购买闸）。
 
 /** 绑卡档 flow：本单不扣款，只把新卡绑上并设为默认（Pro 20x 续费）。 */
@@ -12,6 +13,7 @@ export function isCardAttachPlan(plan: string, planFlow?: string): boolean {
 
 export function planLabel(value: string): string {
   const n = String(value || 'free').trim().toLowerCase()
+  if (isXPremiumPlan(n)) return 'X ' + n.replace(/^x_/, '').replace('premium_plus', 'Premium+').replace('premium', 'Premium').replace('basic', 'Basic').replace('_monthly', ' / month').replace('_yearly', ' / year')
   if (n === 'pro_20x_renew' || n.includes('renew')) return 'Pro 20x 续费'
   if (n.includes('promax') || n === 'pro_50x') return 'Pro 50x'
   if (n.includes('prolite') || n.includes('5x') || n === 'pro_5x') return 'Pro 5x'
@@ -26,6 +28,8 @@ export function planLabel(value: string): string {
 export function planSatisfied(currentPlan: string, requestedPlan: string, planFlow?: string): boolean {
   const current = String(currentPlan || '').trim().toLowerCase()
   const req = String(requestedPlan || '').trim().toLowerCase()
+  if (isXPremiumPlan(req)) return current.startsWith('x_') && current !== 'x_free'
+  if (current.startsWith('x_')) return false
   if (isCardAttachPlan(req, planFlow)) return false
   const currentRank =
     current.includes('promax') || current === 'pro_50x' ? 4 : current.includes('prolite') || current.includes('5x') || current === 'pro_5x'

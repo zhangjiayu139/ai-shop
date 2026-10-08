@@ -9,6 +9,8 @@
 
 #### 6.18.6 發放和查詢 CDK
 
+> **50x 套餐参数：`"plan": "pro_50x"`，产品为 `"product": "gpt"`。** 创建直充订单、发放 CDK 都使用这个值；请求字段是 `plan`，不是 `plan_type`。
+
 以下相對路徑以 `/openapi/v1` 為 Base，由接入方伺服器使用 API Key 呼叫。發碼時收服務費，兌換時的卡片注資與訂閱實付由 CDK 所有者承擔。費率讀取 `GET /gpt-direct/plans`，不要寫死為免費。
 
 `POST /gpt-direct/cdks`：
@@ -19,7 +21,7 @@
 
 | 欄位 | 要求與含義 |
 | --- | --- |
-| `plan` | 必填。`go`、`plus`、`pro_5x`、`pro_20x`、`pro_20x_renew`、`credit250`、`credit500`、`credit1000`、`credit2500`、`credit5000`、`credit25000`，並須仍可購買 |
+| `plan` | 必填。`go`、`plus`、`pro_5x`、`pro_20x`、`pro_50x`、`pro_20x_renew`、`credit250`、`credit500`、`credit1000`、`credit2500`、`credit5000`、`credit25000`，並須仍可購買 |
 | `count` | 預設1，建議1–200；單次最多 **200** 張 |
 | `funding_confirmed` | 必須為 `true`，確認由所有者承擔兌換資金 |
 | `payment_country` | 可選 PH / US / JP / CL / EG；依 `/gpt-direct/plans` 的 `payment_regions`，省略預設 PH |
@@ -230,10 +232,52 @@ curl "$CDK_SITE/api/v1/public/billing/check" -H 'Content-Type: application/json'
 独立站浏览器使用本站 `/api/v1/public/cdk/recover-subscription` 转发同一请求；服务端不附加站点管理员API Key。部署顺序：ACC → 卡台 → 独立CDK站。
 
 
-## Pro 50x（2026-09）
+## Pro 50x：套餐参数与调用示例
 
-新增套餐键 `pro_50x`，上游套餐 `chatgptpromax`，高于20x。商城单笔/批量直充、OpenAPI建单、CDK发码/兑换均可用此键；`promax`为订阅状态别名，既有`pro`仍指20x。已有Go/Plus/5x/20x账号可查询升级报价并选择50x，已经50x不重复购买。升级报价随订阅周期变化，执行时不因新旧价格差异拦截；不确定支付仍只对账。
+50x 的正式套餐键为 **`pro_50x`**。客户调用卡台接口时统一使用 `plan` 字段；`promax` 是订阅状态别名，`chatgptpromax` 是上游标识，两者均不作为本文的建单套餐参数。
+
+| 场景 | 接口 / 字段 | 值或规则 |
+| --- | --- | --- |
+| 直充建单 | `POST /openapi/v1/gpt-direct/orders` | `"product":"gpt", "plan":"pro_50x"` |
+| 发放 CDK | `POST /openapi/v1/gpt-direct/cdks` | `"plan":"pro_50x"` |
+| 查询可用套餐 | `GET /openapi/v1/gpt-direct/plans?product=gpt` | 从 `registry` 读取 `key="pro_50x"`、`purchasable` 和 `service_fee_usd_minor`；`plans.pro_50x` 为该档配置 |
+| 已有订阅升级 | `POST /openapi/v1/gpt-direct/upgrade-quotes` | 选择 `quotes[]` 中 `plan="pro_50x"` 且 `available=true` 的结果，使用该项新 `preflight_token` 和返回的付款币种建单 |
+
+50x 默认服务费为 **$0.15/单**，已配置专属 0 服务费的账号返回 0；始终以当前账号 `GET /gpt-direct/plans?product=gpt` 返回的费率为准。上游订阅实付、开卡/充值手续费及可能适用的 cs_live 附加费另计。
+
+**免费账号首次开通 50x**：先按同一地区预检，再向 `POST /openapi/v1/gpt-direct/orders` 提交。示例中的 `card_id` 须替换为当前 API 账号可用的卡，凭据及预检令牌也须替换为自己的。
+
+```json
+{
+  "product": "gpt",
+  "plan": "pro_50x",
+  "card_id": 123,
+  "credential": {
+    "mode": "session",
+    "session": "<YOUR_SESSION>"
+  },
+  "preflight_token": "<PREFLIGHT_TOKEN>",
+  "payment_country": "PH",
+  "payment_currency": "PHP",
+  "client_request_id": "merchant-pro50x-20260930-001"
+}
+```
+
+请求头使用 `X-API-Key`、`Content-Type: application/json` 和唯一 `Idempotency-Key`。网络重试保留原幂等键与 `client_request_id`；HTTP 202 仅表示受理，继续查询该订单。
+
+**发放 50x CDK**：`POST /openapi/v1/gpt-direct/cdks`。`funding_confirmed=true` 表示码主承担兑换资金；兑换时套餐从 CDK 读取，不要把一张其他套餐的码在兑换请求里改成 50x。 使用自定义品牌前缀时，50x 后缀为 `50X`（例如 `UUU50X-…`）；套餐仍以接口 `plan` 为准。
+
+```json
+{
+  "plan": "pro_50x",
+  "count": 1,
+  "funding_confirmed": true,
+  "payment_country": "PH",
+  "payment_currency": "PHP"
+}
+```
+
+已有 Go/Plus/5x/20x 订阅需要升 50x 时，使用 `POST /openapi/v1/gpt-direct/upgrade-quotes` 的 `pro_50x` 报价凭证。升级差价由该账号实时账单决定，不能用两个套餐标价相减代替。
+
 
 PH采集的50x免税价为PHP 29,008.93（2,900,893最小单位），含税展示价PHP 32,490。真实扣款以账号账单为准，服务费及开关读取套餐注册表。50x升级/非PH注资使用独立上限（默认USD 1,000，可配置），其他套餐原有上限不变。
-
-CDK可在创建时使用 `plan: "pro_50x"`，品牌后缀为 `50X`。兑换仍沿用preview → preflight → redeem流程，指定卡参数规则不变；不需要为50x增加单独兑换接口。

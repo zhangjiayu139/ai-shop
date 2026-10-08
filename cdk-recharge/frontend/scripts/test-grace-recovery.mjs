@@ -31,11 +31,11 @@ try{
  await build({stdin:{contents:compiled.content,resolveDir:resolve(root,'src/views/user'),loader:'ts'},outfile:resolve(tmp,'component.mjs'),bundle:true,platform:'node',format:'esm',external:['vue'],define:{'import.meta.env.MODE':'"test"'},plugins:[{name:'mocks',setup(b){b.onResolve({filter:/.*/},a=>a.path in mocks?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path],loader:'js'}))}}]})
  const {default:component}=await import(pathToFileURL(resolve(tmp,'component.mjs')).href)
  const vm=scope.run(()=>component.setup({}, {expose(){}}))
- const ready=()=>{vm.invalidatePreflight();vm.account.value={...vm.account.value,checked:true,currentPlan:'plus',subscriptionHasActive:true,subscriptionIsDelinquent:true};vm.redemptionToken.value='synthetic-redemption';vm.preflightToken.value='synthetic-old';vm.step.value=3}
+ const ready=()=>{vm.invalidatePreflight();vm.account.value={...vm.account.value,checked:true,currentPlan:'plus',subscriptionHasActive:true,subscriptionIsDelinquent:true};vm.redemptionToken.value='synthetic-redemption';vm.preflightToken.value='synthetic-old';vm.step.value=2}
  const refreshed={preflight_token:'synthetic-new',currentPlan:'free',subscription_has_active:false,subscription_is_delinquent:false,subscription_recovery_required:false}
  ready();confirmation=false;await vm.recoverGraceSubscription();assert.equal(calls.length,0)
  confirmation=true;answer={status:'cleared',preflight:refreshed};await vm.recoverGraceSubscription()
- assert.equal(vm.preflightToken.value,'synthetic-new');assert.equal(vm.account.value.currentPlan,'free');assert.equal(vm.step.value,3);assert.equal(vm.recoveryPending.value,false)
+ assert.equal(vm.preflightToken.value,'synthetic-new');assert.equal(vm.account.value.currentPlan,'free');assert.equal(vm.step.value,2);assert.equal(vm.recoveryPending.value,false)
  assert.deepEqual(calls[0].body,{redemption_token:'synthetic-redemption',preflight_token:'synthetic-old',confirmed:true})
  ready();answer={status:'pending',preflight:{...refreshed,currentPlan:'plus',subscription_has_active:true,subscription_is_delinquent:true}};await vm.recoverGraceSubscription();assert.equal(vm.recoveryPending.value,true)
  const count=calls.length;await vm.doRedeem();assert.equal(calls.length,count,'pending state must not redeem')

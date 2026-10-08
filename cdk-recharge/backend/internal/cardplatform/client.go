@@ -221,8 +221,16 @@ type PlansResponse struct {
 
 // GetPlans GET /gpt-direct/plans — 实时服务费与套餐开关
 // 卡台返回 PaymentConfig：version + plans[key].serviceFeeUsdMinor
-func (c *Client) GetPlans(ctx context.Context) (*PlansResponse, error) {
-	data, err := c.doOpenAPI(ctx, http.MethodGet, "/gpt-direct/plans", nil, "")
+func (c *Client) GetPlans(ctx context.Context, products ...string) (*PlansResponse, error) {
+	product := "gpt"
+	if len(products) > 0 && products[0] == "x" {
+		product = "x"
+	}
+	path := "/gpt-direct/plans"
+	if product == "x" {
+		path += "?product=x"
+	}
+	data, err := c.doOpenAPI(ctx, http.MethodGet, path, nil, "")
 	if err != nil {
 		return nil, err
 	}
@@ -284,6 +292,29 @@ func (c *Client) GetPlans(ctx context.Context) (*PlansResponse, error) {
 		p.MinAmountMinor = jsonInt64(m, "minAmountMinor", "min_amount_minor")
 		p.MaxAmountMinor = jsonInt64(m, "maxAmountMinor", "max_amount_minor")
 		out.Plans[k] = p
+	}
+	if product == "x" {
+		all := out.Plans
+		out.Plans = map[string]PlanInfo{}
+		registry := []PlanRegistryItem{}
+		for _, entry := range out.Registry {
+			if info, ok := all["x_"+entry.Key]; ok && IsXPremiumPlan(entry.Key) {
+				info.Key = entry.Key
+				out.Plans[entry.Key] = info
+				registry = append(registry, entry)
+			}
+		}
+		out.Registry = registry
+		regions := []PaymentRegion{}
+		for _, r := range out.PaymentRegions {
+			if country, err := XPaymentCountry(r.Country); err == nil && country == r.Country {
+				regions = append(regions, r)
+			}
+		}
+		if len(regions) == 0 {
+			regions = []PaymentRegion{{Country: "JP", Currency: "JPY"}}
+		}
+		out.PaymentRegions = regions
 	}
 	return out, nil
 }
@@ -347,11 +378,12 @@ type IssueCardPref struct {
 }
 
 type IssuedCDK struct {
-	ID             int64  `json:"id"`
-	Code           string `json:"code"`
-	Plan           string `json:"plan"`
-	CodePrefix     string `json:"code_prefix"`
-	FeeAmountMinor int64  `json:"fee_amount_minor"`
+	ID             int64   `json:"id"`
+	Code           string  `json:"code"`
+	Plan           string  `json:"plan"`
+	CodePrefix     string  `json:"code_prefix"`
+	FeeAmountMinor int64   `json:"fee_amount_minor"`
+	PaymentCountry *string `json:"payment_country"`
 }
 
 type IssueCDKResult struct {
@@ -486,14 +518,15 @@ func (c *Client) IssueCDKs(ctx context.Context, plan string, count int, idem str
 }
 
 type CDKListItem struct {
-	ID             int64  `json:"id"`
-	Plan           string `json:"plan"`
-	Code           string `json:"code"`
-	FullCode       string `json:"full_code"`
-	CodePrefix     string `json:"code_prefix"`
-	Status         string `json:"status"`
-	FeeAmountMinor int64  `json:"fee_amount_minor"`
-	CreatedAt      string `json:"created_at"`
+	ID             int64   `json:"id"`
+	Plan           string  `json:"plan"`
+	Code           string  `json:"code"`
+	FullCode       string  `json:"full_code"`
+	CodePrefix     string  `json:"code_prefix"`
+	Status         string  `json:"status"`
+	PaymentCountry *string `json:"payment_country"` // nil means upstream omitted the region
+	FeeAmountMinor int64   `json:"fee_amount_minor"`
+	CreatedAt      string  `json:"created_at"`
 }
 
 func (it CDKListItem) FullCodeText() string {
@@ -553,6 +586,11 @@ func (c *Client) ListCDKsQuery(ctx context.Context, q CDKListQuery) (*CDKListRes
 	if err := json.Unmarshal(data, &out); err != nil {
 		return nil, err
 	}
+	for _, it := range out.List {
+		if it.PaymentCountry != nil {
+			*it.PaymentCountry = strings.ToUpper(strings.TrimSpace(*it.PaymentCountry))
+		}
+	}
 	// 兼容 total 为 float64 / string 的松散 JSON
 	if out.Total == 0 && len(out.List) > 0 {
 		var loose map[string]any
@@ -596,8 +634,13 @@ func (c *Client) SyncUpstreamFullCodes(ctx context.Context, status, plan string,
 		}
 		for _, it := range res.List {
 			out.Scanned++
+			var countries []string
+			if it.PaymentCountry != nil {
+				countries = []string{*it.PaymentCountry}
+			}
 			code := it.FullCodeText()
 			if code == "" {
+				_ = db.UpdateCardplatformCDKMetadata(it.ID, "", it.PaymentCountry)
 				out.PrefixOnly++
 				continue
 			}
@@ -606,7 +649,7 @@ func (c *Client) SyncUpstreamFullCodes(ctx context.Context, status, plan string,
 				prefix = code[:14]
 			}
 			_, existed := db.LookupCardplatformCDKCode(it.ID, prefix)
-			if err := db.SaveCardplatformCDKCodeWithStatus(it.ID, code, prefix, it.Plan, it.FeeAmountMinor, it.Status); err != nil {
+			if err := db.SaveCardplatformCDKCodeWithStatus(it.ID, code, prefix, it.Plan, it.FeeAmountMinor, it.Status, countries...); err != nil {
 				continue
 			}
 			if existed {
@@ -616,6 +659,7 @@ func (c *Client) SyncUpstreamFullCodes(ctx context.Context, status, plan string,
 			out.Codes = append(out.Codes, IssuedCDK{
 				ID: it.ID, Code: code, Plan: it.Plan,
 				CodePrefix: prefix, FeeAmountMinor: it.FeeAmountMinor,
+				PaymentCountry: it.PaymentCountry,
 			})
 		}
 		if page*100 >= res.Total {

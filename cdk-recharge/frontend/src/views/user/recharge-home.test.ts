@@ -122,6 +122,38 @@ describe('three-step recharge', () => {
     expect(w.get('[data-testid="confirm-panel"]').isVisible()).toBe(true)
   })
 
+  it('validates X credentials in the same three-step flow without redeeming', async () => {
+    const raw = JSON.stringify({ auth_token: 'a'.repeat(40), ct0: 'b'.repeat(64), billing_email: 'demo@example.invalid' })
+    request.mockResolvedValueOnce(reply({ ...preview, plan: 'premium_monthly' }))
+    const w = await open(); await fill(w); await w.get('textarea').setValue(raw); await validate(w)
+    expect(request.mock.calls.map(c => c[0])).toEqual(['/api/v1/public/cdk/preview', '/api/v1/public/cdk/preflight'])
+    expect(JSON.parse(request.mock.calls[1][1].body).credential).toEqual({ mode: 'session', session: raw })
+    expect(w.get('[data-testid="confirm-panel"]').isVisible()).toBe(true)
+    expect(w.text()).toContain('X Premium')
+    expect(w.findAll('[data-flow-step]')).toHaveLength(3)
+    expect(sessionStorage.getItem('cdk_redeem_progress_v1')).not.toContain('auth_token')
+  })
+
+  it('rejects a ChatGPT session for an X code before sending credentials upstream', async () => {
+    request.mockResolvedValueOnce(reply({ ...preview, plan: 'premium_monthly' }))
+    const w = await open(); await fill(w); await validate(w)
+    expect(request).toHaveBeenCalledTimes(1)
+    expect(w.get('form').isVisible()).toBe(true)
+    expect(w.text()).toContain('X Cookie JSON')
+  })
+
+  it('switches X codes away from mailbox credentials and allows a valid retry', async () => {
+    const raw = JSON.stringify({ auth_token: 'a'.repeat(40), ct0: 'b'.repeat(64), billing_email: 'demo@example.invalid' })
+    request.mockResolvedValueOnce(reply({ ...preview, plan: 'basic_monthly' }))
+    const w = await open(); await fill(w, 'mailbox'); await validate(w)
+    expect(request).toHaveBeenCalledTimes(1)
+    expect(w.find('textarea').isVisible()).toBe(true)
+    expect(w.find('[data-testid="mailbox-mode"]').exists()).toBe(false)
+    request.mockResolvedValueOnce(reply({ ...preview, plan: 'basic_monthly' }))
+    await w.get('textarea').setValue(raw); await validate(w)
+    expect(w.get('[data-testid="confirm-panel"]').isVisible()).toBe(true)
+  })
+
   it('guards duplicate validation clicks while preview is pending', async () => {
     let finish!: (r: Response) => void
     request.mockReturnValueOnce(new Promise<Response>(resolve => { finish = resolve }))

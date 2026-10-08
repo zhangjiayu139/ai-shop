@@ -81,6 +81,7 @@ func createTables() error {
 			plan TEXT,
 			fee_amount_minor INTEGER DEFAULT 0,
 			status TEXT DEFAULT '',
+			payment_country TEXT,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_cp_cdk_upstream ON cardplatform_cdk_codes(upstream_id)`,
@@ -277,6 +278,9 @@ func createTables() error {
 	}
 	if err := migrateCardplatformCDKStatusCol(); err != nil {
 		log.Printf("migrateCardplatformCDKStatusCol: %v", err)
+	}
+	if err := migrateCardplatformCDKRegionCol(); err != nil {
+		return fmt.Errorf("migrate cardplatform CDK region: %w", err)
 	}
 	if err := ensureDefaultAdmin(); err != nil {
 		return err
@@ -882,12 +886,12 @@ func legacyUUIDCode(planType string, id int64) string {
 }
 
 // SaveCardplatformCDKCode 把完整码写入本站 SQLite（发码 / 从卡台同步 / 回填）。
-func SaveCardplatformCDKCode(upstreamID int64, code, prefix, plan string, feeMinor int64) error {
-	return SaveCardplatformCDKCodeWithStatus(upstreamID, code, prefix, plan, feeMinor, "unused")
+func SaveCardplatformCDKCode(upstreamID int64, code, prefix, plan string, feeMinor int64, country ...string) error {
+	return SaveCardplatformCDKCodeWithStatus(upstreamID, code, prefix, plan, feeMinor, "unused", country...)
 }
 
 // SaveCardplatformCDKCodeWithStatus 同上，并写入/更新 status。
-func SaveCardplatformCDKCodeWithStatus(upstreamID int64, code, prefix, plan string, feeMinor int64, status string) error {
+func SaveCardplatformCDKCodeWithStatus(upstreamID int64, code, prefix, plan string, feeMinor int64, status string, country ...string) error {
 	if DB == nil {
 		return fmt.Errorf("db not init")
 	}
@@ -904,16 +908,23 @@ func SaveCardplatformCDKCodeWithStatus(upstreamID int64, code, prefix, plan stri
 	if status == "" {
 		status = "unused"
 	}
+	// nil means an old cache/import did not include region metadata. Empty string
+	// means an authoritative response or issue request chose the default region.
+	var region any
+	if len(country) > 0 {
+		region = strings.ToUpper(strings.TrimSpace(country[0]))
+	}
 	_, err := DB.Exec(`
-		INSERT INTO cardplatform_cdk_codes (upstream_id, code, code_prefix, plan, fee_amount_minor, status, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		INSERT INTO cardplatform_cdk_codes (upstream_id, code, code_prefix, plan, fee_amount_minor, status, payment_country, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(code) DO UPDATE SET
 			upstream_id = excluded.upstream_id,
 			code_prefix = excluded.code_prefix,
 			plan = CASE WHEN excluded.plan != '' THEN excluded.plan ELSE cardplatform_cdk_codes.plan END,
 			fee_amount_minor = CASE WHEN excluded.fee_amount_minor > 0 THEN excluded.fee_amount_minor ELSE cardplatform_cdk_codes.fee_amount_minor END,
-			status = CASE WHEN excluded.status != '' THEN excluded.status ELSE cardplatform_cdk_codes.status END
-	`, upstreamID, code, prefix, plan, feeMinor, status)
+			status = CASE WHEN excluded.status != '' THEN excluded.status ELSE cardplatform_cdk_codes.status END,
+			payment_country = COALESCE(excluded.payment_country, cardplatform_cdk_codes.payment_country)
+	`, upstreamID, code, prefix, plan, feeMinor, status, region)
 	if err != nil {
 		return fmt.Errorf("save cardplatform cdk: %w", err)
 	}
@@ -958,13 +969,14 @@ func CountCardplatformCDKCodes() int {
 
 // StoredCDKCode 本站已存的完整码行。
 type StoredCDKCode struct {
-	UpstreamID     int64  `json:"id"`
-	Code           string `json:"code"`
-	CodePrefix     string `json:"code_prefix"`
-	Plan           string `json:"plan"`
-	FeeAmountMinor int64  `json:"fee_amount_minor"`
-	Status         string `json:"status"`
-	CreatedAt      string `json:"created_at"`
+	UpstreamID     int64   `json:"id"`
+	Code           string  `json:"code"`
+	CodePrefix     string  `json:"code_prefix"`
+	Plan           string  `json:"plan"`
+	FeeAmountMinor int64   `json:"fee_amount_minor"`
+	Status         string  `json:"status"`
+	PaymentCountry *string `json:"payment_country"` // nil=not yet synced, empty=default PH
+	CreatedAt      string  `json:"created_at"`
 }
 
 // ListCardplatformStoredCDKCodes 列出本站 SQLite 中的完整码（可按 plan / q / status 过滤）。
@@ -1043,7 +1055,7 @@ func ListCardplatformStoredCDKCodesPage(plan, q, status string, page, pageSize i
 	offset := (page - 1) * pageSize
 	sql := `
 		SELECT COALESCE(upstream_id,0), code, COALESCE(code_prefix,''), COALESCE(plan,''),
-		       COALESCE(fee_amount_minor,0), COALESCE(status,''), COALESCE(created_at,'')
+		       COALESCE(fee_amount_minor,0), COALESCE(status,''), COALESCE(created_at,''), payment_country
 		FROM cardplatform_cdk_codes` + where + `
 		ORDER BY created_at DESC, rowid DESC
 		LIMIT ? OFFSET ?`
@@ -1056,7 +1068,7 @@ func ListCardplatformStoredCDKCodesPage(plan, q, status string, page, pageSize i
 	out := make([]StoredCDKCode, 0, pageSize)
 	for rows.Next() {
 		var it StoredCDKCode
-		if err := rows.Scan(&it.UpstreamID, &it.Code, &it.CodePrefix, &it.Plan, &it.FeeAmountMinor, &it.Status, &it.CreatedAt); err != nil {
+		if err := rows.Scan(&it.UpstreamID, &it.Code, &it.CodePrefix, &it.Plan, &it.FeeAmountMinor, &it.Status, &it.CreatedAt, &it.PaymentCountry); err != nil {
 			return nil, 0, err
 		}
 		it.Code = strings.TrimSpace(it.Code)
@@ -1473,17 +1485,22 @@ func UpsertCardProduct(p CardProductCache) error {
 	return err
 }
 
-// MarkCardProductsOfflineExcept 将不在 present 集合中的缓存产品标为已下线。
-// 卡台 OpenAPI /products 只返回 enabled=true 的可开产品；下架后不再出现在列表，
-// 若不在此收口，历史 VISA 等会永久显示「在线」。
-func MarkCardProductsOfflineExcept(present map[string]bool) (int, error) {
+// PruneCardProductsExcept 删除不在 present 集合中的缓存产品（含早先已标下线的）。
+//
+// 卡台对外接口（/gpt-direct/card-products、/products）只返回已上架的卡段；不再出现
+// = 已下架或对本站不可见。已下架的卡段/BIN 只能由卡台管理员看到，CDK 不再保留
+// 它的 BIN、描述等信息（原来标「已下线」继续展示，等于把下架卡 BIN 泄露给 CDK 后台）。
+// 选卡规则里仍引用它时，规则照常显示为离线（找不到产品即离线）。
+//
+// present 为空时不动：防止一次异常的空响应把整个缓存清掉。
+func PruneCardProductsExcept(present map[string]bool) (int, error) {
 	if DB == nil {
 		return 0, fmt.Errorf("db not ready")
 	}
-	if present == nil {
-		present = map[string]bool{}
+	if len(present) == 0 {
+		return 0, nil
 	}
-	rows, err := DB.Query(`SELECT product_code FROM card_product_cache WHERE enabled = 1`)
+	rows, err := DB.Query(`SELECT product_code FROM card_product_cache`)
 	if err != nil {
 		return 0, err
 	}
@@ -1494,22 +1511,16 @@ func MarkCardProductsOfflineExcept(present map[string]bool) (int, error) {
 		if err := rows.Scan(&code); err != nil {
 			return 0, err
 		}
-		code = strings.TrimSpace(code)
-		if code == "" || present[code] {
-			continue
+		if !present[strings.TrimSpace(code)] {
+			stale = append(stale, code)
 		}
-		stale = append(stale, code)
 	}
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
 	n := 0
 	for _, code := range stale {
-		res, err := DB.Exec(`
-			UPDATE card_product_cache
-			SET enabled = 0, synced_at = CURRENT_TIMESTAMP
-			WHERE product_code = ? AND enabled = 1
-		`, code)
+		res, err := DB.Exec(`DELETE FROM card_product_cache WHERE product_code = ?`, code)
 		if err != nil {
 			return n, err
 		}
