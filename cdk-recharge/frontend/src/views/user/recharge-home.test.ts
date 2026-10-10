@@ -154,6 +154,53 @@ describe('three-step recharge', () => {
     expect(w.get('[data-testid="confirm-panel"]').isVisible()).toBe(true)
   })
 
+  it('confirms Grok without a preflight ticket and submits its credential only on confirmation', async () => {
+    const raw = 'sso=' + 'synthetic-grok-cookie'.repeat(3)
+    request.mockResolvedValueOnce(reply({ ...preview, plan: 'monthly' }))
+      .mockResolvedValueOnce(reply({ code: 0, data: { email: 'demo@example.invalid', currentPlan: 'free' } }))
+    const w = await open(); await fill(w); await w.get('textarea').setValue(raw); await validate(w)
+    expect(w.get('[data-testid="confirm-panel"]').isVisible()).toBe(true)
+    expect(w.findAll('[data-flow-step]')).toHaveLength(3)
+    expect(request).toHaveBeenCalledTimes(2)
+    expect(sessionStorage.getItem('cdk_redeem_progress_v1')).not.toContain(raw)
+    await w.get('[data-testid="confirm-redeem"]').trigger('click'); await flushPromises()
+    const call = request.mock.calls.find(c => c[0].endsWith('/redeem'))!
+    expect(JSON.parse(call[1].body).credential).toEqual({ mode: 'session', session: raw })
+    expect(JSON.parse(call[1].body)).not.toHaveProperty('preflight_token')
+    await w.get('[data-testid="reset-recharge"]').trigger('click')
+    expect(w.get('textarea').element.value).toBe('')
+  })
+
+  it('blocks Grok redemption when upstream reports a blocking reason', async () => {
+    request.mockResolvedValueOnce(reply({ ...preview, plan: 'monthly' }))
+      .mockResolvedValueOnce(reply({ code: 0, data: { blocking_reason: '已有订阅，请勿重复购买' } }))
+    const w = await open(); await fill(w); await w.get('textarea').setValue('sso=' + 'test-only-grok-cookie'.repeat(3)); await validate(w)
+    expect(w.get('[data-testid="confirm-panel"]').isVisible()).toBe(true)
+    expect(w.text()).toContain('已有订阅，请勿重复购买')
+    expect(w.get('[data-testid="confirm-redeem"]').attributes('disabled')).toBeDefined()
+    expect(request).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not restore a Grok confirmation after refresh without its in-memory credential', async () => {
+    request.mockResolvedValueOnce(reply({ ...preview, plan: 'monthly' }))
+      .mockResolvedValueOnce(reply({ code: 0, data: { currentPlan: 'free' } }))
+    const w = await open(); await fill(w); await w.get('textarea').setValue('sso=' + 'test-only-grok-cookie'.repeat(3)); await validate(w)
+    expect(w.get('[data-testid="confirm-panel"]').isVisible()).toBe(true)
+    w.unmount(); wrapper = undefined
+    const fresh = await open()
+    expect(fresh.get('form').isVisible()).toBe(true)
+    expect(fresh.get('textarea').element.value).toBe('')
+    expect(request).toHaveBeenCalledTimes(2)
+  })
+
+  it('still requires a preflight ticket for GPT even when a Grok-like cookie is pasted', async () => {
+    request.mockResolvedValueOnce(reply(preview)).mockResolvedValueOnce(reply({ code: 0, data: { currentPlan: 'free' } }))
+    const w = await open(); await fill(w); await w.get('textarea').setValue('sso=' + 'test-only-grok-cookie'.repeat(3)); await validate(w)
+    expect(w.get('form').isVisible()).toBe(true)
+    expect(w.get('[data-testid="confirm-redeem"]').attributes('disabled')).toBeDefined()
+    expect(request.mock.calls.some(c => c[0].endsWith('/redeem'))).toBe(false)
+  })
+
   it('guards duplicate validation clicks while preview is pending', async () => {
     let finish!: (r: Response) => void
     request.mockReturnValueOnce(new Promise<Response>(resolve => { finish = resolve }))

@@ -93,6 +93,20 @@ func CardPlatformBalance(c *gin.Context) {
 	c.JSON(http.StatusOK, bal)
 }
 
+func issueProduct(explicit, plan string) string {
+	switch p := strings.ToLower(strings.TrimSpace(explicit)); p {
+	case "gpt", "x", "grok":
+		return p
+	}
+	if cardplatform.IsXPremiumPlan(plan) {
+		return "x"
+	}
+	if cardplatform.IsGrokPlan(plan) {
+		return "grok"
+	}
+	return "gpt"
+}
+
 func issuePrefsWithPaymentCountry(pref cardplatform.IssueCardPref, hasSitePref bool, country string) []cardplatform.IssueCardPref {
 	country = strings.ToUpper(strings.TrimSpace(country))
 	if !hasSitePref && country == "" {
@@ -103,10 +117,11 @@ func issuePrefsWithPaymentCountry(pref cardplatform.IssueCardPref, hasSitePref b
 }
 
 // CardPlatformIssueCDKs POST /api/v1/admin/cardplatform/cdks
-// body: { plan, count, funding_confirmed, payment_country }
+// body: { plan, product, count, funding_confirmed, payment_country }
 func CardPlatformIssueCDKs(c *gin.Context) {
 	var req struct {
 		Plan             string `json:"plan"`
+		Product          string `json:"product"`
 		Count            int    `json:"count"`
 		FundingConfirmed bool   `json:"funding_confirmed"`
 		PaymentCountry   string `json:"payment_country"`
@@ -128,14 +143,18 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 	// 里面有 claude_*（没有 CDK 兑换流程）也有 enabled=false 的档（兑换时被 ACC 挡）。
 	// 按 SellableKeys 校验，跟界面上能看到的是同一份，不会出现「看得见发不出」
 	// 或者「发得出兑不掉」。
+	product := issueProduct(req.Product, plan)
+	if product != issueProduct("", plan) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "product does not match plan"})
+		return
+	}
+	if product == "grok" {
+		plan = cardplatform.GrokBarePlan(plan)
+	}
 	if cli := cardplatform.NewFromSettings(); cli != nil {
-		product := "gpt"
-		if cardplatform.IsXPremiumPlan(plan) {
-			product = "x"
-		}
 		plans, err := cli.GetPlans(c.Request.Context(), product)
-		if product == "x" && (err != nil || plans == nil || !plans.SellableKeys()[plan]) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "X plan is unavailable; refresh the catalogue before issuing"})
+		if product != "gpt" && (err != nil || plans == nil || !plans.SellableKeys()[plan]) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": product + " plan is unavailable; refresh the catalogue before issuing"})
 			return
 		}
 		if err == nil && plans != nil && len(plans.Plans) > 0 {
@@ -179,7 +198,10 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 	// 本站选卡配置 → 发码偏好（跳过未启动卡头；ch1 等历史写法会归一成 one）
 	pref, hasSitePref := issuePrefFromSite()
 	payCountry := strings.ToUpper(strings.TrimSpace(req.PaymentCountry))
-	if cardplatform.IsXPremiumPlan(plan) {
+	if product == "grok" {
+		payCountry = "US"
+	}
+	if product == "x" {
 		var regionErr error
 		payCountry, regionErr = cardplatform.XPaymentCountry(payCountry)
 		if regionErr != nil {
@@ -190,10 +212,14 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 	issuePrefs := issuePrefsWithPaymentCountry(pref, hasSitePref, payCountry)
 	var res *cardplatform.IssueCDKResult
 	var err error
+	wirePlan := plan
+	if product == "grok" {
+		wirePlan = cardplatform.GrokIssuePlan(plan)
+	}
 	if len(issuePrefs) > 0 {
-		res, err = cli.IssueCDKs(c.Request.Context(), plan, req.Count, idem, issuePrefs[0])
+		res, err = cli.IssueCDKs(c.Request.Context(), wirePlan, req.Count, idem, issuePrefs[0])
 	} else {
-		res, err = cli.IssueCDKs(c.Request.Context(), plan, req.Count, idem)
+		res, err = cli.IssueCDKs(c.Request.Context(), wirePlan, req.Count, idem)
 	}
 	if err != nil {
 		// 超时/断线时卡台可能已经出码。立刻从卡台列表把完整码捞回本站。
@@ -1011,7 +1037,7 @@ func PublicCDKPreflight(c *gin.Context) {
 		}
 	}
 	sess := extractCredentialSession(body["credential"])
-	if sess != "" && !cardplatform.IsXPremiumCredential(sess) && (code != "" || tok != "") {
+	if sess != "" && !cardplatform.IsXPremiumCredential(sess) && !cardplatform.IsGrokCredential(sess) && (code != "" || tok != "") {
 		if err := db.BindCDKSession(code, tok, sess); err != nil {
 			log.Printf("[cdk-preflight] bind session failed code=%s tok=%s: %v", code, shortTok(tok), err)
 		}
@@ -1198,9 +1224,9 @@ func docsDefaultPlans() map[string]cardplatform.SellablePlan {
 
 // 公开展示服务费参考价（不暴露 API Key；若未配置 Key 则返回文档默认价）
 func PublicCDKPlans(c *gin.Context) {
-	if c.Query("product") == "x" {
-		// X has no safe GPT fallback catalogue, including on old upstreams.
-		plans, err := cardplatform.NewFromSettings().GetPlans(c.Request.Context(), "x")
+	if product := c.Query("product"); product == "x" || product == "grok" {
+		// Non-GPT products must not fall back to the GPT catalogue.
+		plans, err := cardplatform.NewFromSettings().GetPlans(c.Request.Context(), product)
 		if err != nil {
 			writeCardErr(c, err)
 			return

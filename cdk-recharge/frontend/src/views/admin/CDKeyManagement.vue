@@ -37,7 +37,7 @@
 
     <label class="text-sm">{{ t('xPremium.product') }}
       <select v-model="directProduct" class="input !w-48" :disabled="issuing || loadingMeta" @change="loadMeta">
-        <option value="gpt">ChatGPT</option><option value="x">X Premium</option>
+        <option value="gpt">ChatGPT</option><option value="x">X Premium</option><option value="grok">Grok</option>
       </select>
     </label>
     <div v-if="metaError" class="alert alert-error">{{ metaError }}</div>
@@ -83,8 +83,8 @@
           </el-button-group>
           <span class="text-sm text-muted">付款地区</span>
           <el-select v-model="form.payment_country" size="small" style="width: 150px"
-                     :placeholder="directProduct === 'x' ? '默认(日本)' : '默认(菲律宾)'">
-            <el-option v-if="directProduct !== 'x'" label="默认(菲律宾)" value="" />
+                     :placeholder="directProduct === 'x' ? '默认(日本)' : directProduct === 'grok' ? '美国(USD 固定价)' : '默认(菲律宾)'">
+            <el-option v-if="directProduct === 'gpt'" label="默认(菲律宾)" value="" />
             <el-option v-for="r in paymentRegions" :key="r.country"
                        :label="`${regionLabel(r.country)} (${r.currency})`" :value="r.country" />
           </el-select>
@@ -93,6 +93,7 @@
             {{ issuing ? '购买中…' : `购买 ${form.count} 张 ${planLabel(form.plan)} · $${estimatedTotal}` }}
           </el-button>
         </div>
+        <p v-if="isRenewPlan" class="text-xs font-semibold" style="color: var(--err)">⚠️ 续费完成后请联系客户取消自动续费，不取消次月可能会连续扣款</p>
         <p v-if="!configured" class="text-xs" style="color: var(--err)">请先在「卡台配置」填写 Base 与 sk_</p>
         <p v-else-if="!form.funding_confirmed" class="text-xs text-muted">勾选「确认承担兑换资金」后再购买。实付由本账户承担，服务费从卡台余额扣除。</p>
         <p v-if="form.payment_country" class="text-xs text-muted">所选地区会影响兑换付款；套餐卡片的垫付金额是默认地区参考，实际金额以卡台为准。</p>
@@ -327,6 +328,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { authFetch } from '../../lib/api'
 import { dialog } from '../../lib/dialog'
 import { copyToClipboard } from '../../lib/clipboard'
+import { isCardAttachPlan } from '../../lib/plan'
 import { availablePaymentCountry, paymentRegionsFromResponse, type PaymentRegion } from '../../lib/payment-region'
 
 const { t } = useI18n()
@@ -436,6 +438,8 @@ const planCards = computed(() =>
     requiresActiveSubscription: !!meta.requires_active_subscription,
   })),
 )
+
+const isRenewPlan = computed(() => isCardAttachPlan(form.plan, planMeta(form.plan)?.flow))
 
 const canIssue = computed(() =>
   configured.value && form.funding_confirmed && form.count >= 1 && form.count <= ISSUE_MAX && !issuing.value && !loadingMeta.value &&
@@ -1190,6 +1194,7 @@ async function loadMeta() {
       // 服务端已按「卡台注册表 ∩ ACC 定价开关」过滤，这里拿到什么就显示什么
       planRegistry.value = d.registry || []
       if (directProduct.value === 'x' && !form.payment_country) form.payment_country = 'JP'
+      if (directProduct.value === 'grok') form.payment_country = 'US'
       pricingVersion.value = d.version ?? null
       priceSource.value = 'live'
     } else {
@@ -1224,6 +1229,7 @@ async function issue() {
       method: 'POST',
       body: JSON.stringify({
         plan: form.plan,
+        product: directProduct.value,
         count: form.count,
         funding_confirmed: true,
         payment_country: form.payment_country || '',

@@ -34,13 +34,13 @@
           </div>
           <div class="recharge-field">
             <div class="credential-heading">
-              <label :for="credMode === 'session' ? 'recharge-session' : 'recharge-email'">{{ t(isXPremiumPlan(targetPlan) ? 'xPremium.credential' : 'rechargeHome.credentials') }}</label>
-              <div v-if="!isXPremiumPlan(targetPlan)" class="credential-switch" role="group" :aria-label="t('rechargeHome.credentials')">
+              <label :for="credMode === 'session' ? 'recharge-session' : 'recharge-email'">{{ t(isGrok ? 'grok.credential' : isXPremiumPlan(targetPlan) ? 'xPremium.credential' : 'rechargeHome.credentials') }}</label>
+              <div v-if="!isXPremiumPlan(targetPlan) && !isGrok" class="credential-switch" role="group" :aria-label="t('rechargeHome.credentials')">
                 <button type="button" :aria-pressed="credMode === 'session'" :disabled="busy" @click="setCredentialMode('session')">Session</button>
                 <button type="button" data-testid="mailbox-mode" :aria-pressed="credMode === 'mailbox'" :disabled="busy" @click="setCredentialMode('mailbox')">{{ t('rechargeHome.mailbox') }}</button>
               </div>
             </div>
-            <textarea v-if="credMode === 'session'" id="recharge-session" v-model="sessionRaw" class="input session-input" :aria-label="t(isXPremiumPlan(targetPlan) ? 'xPremium.credential' : 'rechargeHome.sessionLabel')" :placeholder="t(isXPremiumPlan(targetPlan) ? 'xPremium.placeholder' : 'rechargeHome.sessionPlaceholder')" autocomplete="off" spellcheck="false" :disabled="busy" :aria-invalid="!!error && errorField === 'credential'" aria-describedby="credential-feedback" @input="invalidateVerification(false)" />
+            <textarea v-if="credMode === 'session'" id="recharge-session" v-model="sessionRaw" class="input session-input" :aria-label="t(isGrok ? 'grok.credential' : isXPremiumPlan(targetPlan) ? 'xPremium.credential' : 'rechargeHome.sessionLabel')" :placeholder="t(isGrok ? 'grok.placeholder' : isXPremiumPlan(targetPlan) ? 'xPremium.placeholder' : 'rechargeHome.sessionPlaceholder')" autocomplete="off" spellcheck="false" :disabled="busy" :aria-invalid="!!error && errorField === 'credential'" aria-describedby="credential-feedback" @input="invalidateVerification(false)" />
             <div v-else class="mailbox-fields">
               <label class="sr-only" for="recharge-email">{{ t('rechargeHome.email') }}</label>
               <input id="recharge-email" v-model="email" type="email" class="input" :placeholder="t('rechargeHome.email')" autocomplete="off" :disabled="busy" :aria-invalid="!!error && errorField === 'credential'" aria-describedby="credential-feedback" @input="invalidateVerification(false)" />
@@ -53,8 +53,8 @@
               <button type="button" class="text-action muted-action" data-testid="clear-credentials" :disabled="busy" @click="clearCredentials">{{ t('rechargeHome.clear') }}</button>
             </div>
             <div v-if="helpOpen" id="credential-help" class="credential-help">
-              <p>{{ t(isXPremiumPlan(targetPlan) ? 'xPremium.hint' : 'rechargeHome.help') }}</p>
-              <a v-if="!isXPremiumPlan(targetPlan)" href="https://chatgpt.com/api/auth/session" target="_blank" rel="noopener noreferrer" class="app-link">{{ t('rechargeHome.openSession') }} ↗</a>
+              <p>{{ t(isGrok ? 'grok.hint' : isXPremiumPlan(targetPlan) ? 'xPremium.hint' : 'rechargeHome.help') }}</p>
+              <a v-if="!isXPremiumPlan(targetPlan) && !isGrok" href="https://chatgpt.com/api/auth/session" target="_blank" rel="noopener noreferrer" class="app-link">{{ t('rechargeHome.openSession') }} ↗</a>
             </div>
           </div>
           <p class="credential-privacy"><Lock aria-hidden="true" /><span>{{ t('rechargeHome.privacy') }}</span></p>
@@ -126,7 +126,8 @@
           预检未返回账号摘要，仍可尝试兑换（以卡台校验为准）。
         </div>
 
-        <div v-if="alreadySatisfied && !needsSubscriptionRecovery && !recoveryPending" class="alert" style="background: var(--warn-soft, #fef3c7); color: var(--warn, #b45309); border-color: var(--warn, #d97706)">
+        <div v-if="grokBlockingReason" class="alert" role="alert" style="background: var(--warn-soft, #fef3c7); color: var(--warn, #b45309); border-color: var(--warn, #d97706)">{{ grokBlockingReason }}</div>
+        <div v-if="alreadySatisfied && !grokBlockingReason && !needsSubscriptionRecovery && !recoveryPending" class="alert" style="background: var(--warn-soft, #fef3c7); color: var(--warn, #b45309); border-color: var(--warn, #d97706)">
           {{ alreadySatisfiedHint }}
         </div>
 
@@ -141,7 +142,7 @@
         <div v-if="error" class="alert alert-error">{{ error }}</div>
         <div class="flex gap-3">
           <button class="btn-secondary flex-1" :disabled="busy || recoveringSubscription" data-testid="edit-details" @click="step = 1">{{ t('rechargeHome.back') }}</button>
-          <button class="btn-primary flex-1" data-testid="confirm-redeem" :disabled="busy || recoveringSubscription || recoveryPending || needsSubscriptionRecovery || alreadySatisfied || !preflightToken" @click="doRedeem">
+          <button class="btn-primary flex-1" data-testid="confirm-redeem" :disabled="busy || recoveringSubscription || recoveryPending || needsSubscriptionRecovery || alreadySatisfied || !canRedeem" @click="doRedeem">
             {{ busy ? t('common.submitting') : alreadySatisfied ? '当前套餐已满足' : t('rechargeHome.confirm') }}
           </button>
         </div>
@@ -250,6 +251,7 @@ import { siteBrand } from '../../theme'
 import { dialog } from '../../lib/dialog'
 import { planLabel, planSatisfied as isSatisfied } from '../../lib/plan'
 import { isXPremiumPlan, xPremiumCredential } from '../../lib/x-premium'
+import { grokCredential, isGrokPlan } from '../../lib/grok'
 import { restoreRechargeStep, serializeRechargeStep } from './recharge-progress'
 
 const { t } = useI18n({ useScope: 'global' })
@@ -274,6 +276,9 @@ const code = ref('')
 const previewInfo = ref<any>(null)
 const redemptionToken = ref('')
 const preflightToken = ref('')
+// Grok 不产预检票；登录态仅在内存中保留，不写入进度缓存。
+const grokSession = ref('')
+const grokBlockingReason = ref('')
 const credMode = ref<'session' | 'mailbox'>('session')
 const sessionRaw = ref('')
 const email = ref('')
@@ -410,6 +415,8 @@ const resultPretty = computed(() => JSON.stringify(resultBody.value, null, 2))
 const targetPlan = computed(() =>
   String(previewInfo.value?.plan || previewInfo.value?.plan_type || '').toLowerCase(),
 )
+const isGrok = computed(() => isGrokPlan(targetPlan.value))
+const canRedeem = computed(() => isGrok.value ? !!grokSession.value && !grokBlockingReason.value : !!preflightToken.value)
 
 const subscriptionStatusText = computed(() => {
   if (account.value.subscriptionHasActive === true) return '有效'
@@ -747,6 +754,8 @@ function invalidateVerification(includePreview: boolean) {
   flowVersion++
   preflightSequence++
   preflightToken.value = ''
+  grokSession.value = ''
+  grokBlockingReason.value = ''
   recoveryPending.value = false
   clearAccount()
   error.value = ''
@@ -795,6 +804,8 @@ async function doValidate() {
   previewInfo.value = null
   redemptionToken.value = ''
   preflightToken.value = ''
+  grokSession.value = ''
+  grokBlockingReason.value = ''
   clearAccount()
   try {
     const { r, data } = await api('/api/v1/public/cdk/preview', {
@@ -818,16 +829,16 @@ async function doValidate() {
       return
     }
     errorField.value = 'credential'
-    if (isXPremiumPlan(targetPlan.value) && credMode.value !== 'session') {
+    if ((isXPremiumPlan(targetPlan.value) || isGrok.value) && credMode.value !== 'session') {
       credMode.value = 'session'
-      error.value = t('xPremium.invalid')
+      error.value = t(isGrok.value ? 'grok.invalid' : 'xPremium.invalid')
       return
     }
     let credential: { mode: 'session'; session: string } | { mode: 'mailbox'; email: string; password: string }
     if (credMode.value === 'session') {
-      const session = isXPremiumPlan(targetPlan.value) ? xPremiumCredential(sessionRaw.value) : extractSession(sessionRaw.value)
+      const session = isGrok.value ? grokCredential(sessionRaw.value) : isXPremiumPlan(targetPlan.value) ? xPremiumCredential(sessionRaw.value) : extractSession(sessionRaw.value)
       if (!session) {
-        error.value = t(isXPremiumPlan(targetPlan.value) ? 'xPremium.invalid' : 'rechargeHome.invalidSession')
+        error.value = t(isGrok.value ? 'grok.invalid' : isXPremiumPlan(targetPlan.value) ? 'xPremium.invalid' : 'rechargeHome.invalidSession')
         return
       }
       credential = { mode: 'session', session }
@@ -850,6 +861,13 @@ async function doValidate() {
       return
     }
     const body = payload?.data && typeof payload.data === 'object' ? payload.data : payload || {}
+    if (isGrok.value && credential.mode === 'session') {
+      grokSession.value = credential.session
+      grokBlockingReason.value = String(body.blocking_reason || '')
+      applyAccountFromPreflight(payload)
+      step.value = 2
+      return
+    }
     preflightToken.value = body.preflight_token || payload?.preflight_token || ''
     if (!preflightToken.value) {
       error.value = t('rechargeHome.missingPreflight')
@@ -907,7 +925,7 @@ async function recoverGraceSubscription() {
 }
 
 async function doRedeem() {
-  if (busy.value || recoveringSubscription.value || recoveryPending.value || needsSubscriptionRecovery.value || step.value !== 2 || alreadySatisfied.value || !redemptionToken.value || !preflightToken.value) return
+  if (busy.value || recoveringSubscription.value || recoveryPending.value || needsSubscriptionRecovery.value || step.value !== 2 || alreadySatisfied.value || !redemptionToken.value || !canRedeem.value) return
   error.value = ''
   busy.value = true
   const version = ++flowVersion
@@ -920,11 +938,9 @@ async function doRedeem() {
     const client_request_id = 'web-' + deviceId.slice(0, 8) + '-' + Date.now()
     const { r, data } = await api('/api/v1/public/cdk/redeem', {
       method: 'POST',
-      body: JSON.stringify({
-        redemption_token: redemptionToken.value,
-        preflight_token: preflightToken.value,
-        client_request_id,
-      }),
+      body: JSON.stringify(isGrok.value
+        ? { redemption_token: redemptionToken.value, credential: { mode: 'session', session: grokSession.value }, client_request_id }
+        : { redemption_token: redemptionToken.value, preflight_token: preflightToken.value, client_request_id }),
     })
     if (disposed || version !== flowVersion) return
     applyResultPayload(data)
@@ -942,6 +958,8 @@ async function doRedeem() {
       !data?.order && !data?.data?.order && !resultStatus.value &&
       !data?.order_id && !data?.data?.order_id && !data?.id && !data?.data?.id) {
       preflightToken.value = ''
+      grokSession.value = ''
+      grokBlockingReason.value = ''
       clearAccount()
       errorField.value = 'general'
       step.value = 1
@@ -1035,6 +1053,8 @@ function resetAll() {
   previewInfo.value = null
   redemptionToken.value = ''
   preflightToken.value = ''
+  grokSession.value = ''
+  grokBlockingReason.value = ''
   clearAccount()
   resultBody.value = null
   resultStatus.value = ''

@@ -14,7 +14,7 @@ function resetPreviousRedemption(mode) {
     'step', 'busy', 'error', 'code', 'previewInfo', 'redemptionToken', 'preflightToken',
     'sessionRaw', 'email', 'password', 'resultBody', 'resultStatus', 'resultStage',
     'resultMessage', 'resultEmail', 'resultCardLastFour', 'timeline', 'polling',
-    'recoveringSubscription', 'recoveryPending',
+    'recoveringSubscription', 'recoveryPending', 'grokSession', 'grokBlockingReason',
   ].map(key => [key, { value: 'previous-redemption' }]))
   state.credMode = { value: mode }
   state.sessionRaw.value = '{"sessionToken":"test-only-placeholder"}'
@@ -39,7 +39,7 @@ function resetPreviousRedemption(mode) {
 for (const mode of ['session', 'mailbox']) {
   test(`再兑一张 clears all credentials in ${mode} mode`, () => {
     const { state } = resetPreviousRedemption(mode)
-    for (const field of ['sessionRaw', 'email', 'password']) {
+    for (const field of ['sessionRaw', 'email', 'password', 'grokSession', 'grokBlockingReason']) {
       assert.equal(state[field].value, '', `${field} must not carry into the next redemption`)
     }
     assert.equal(state.credMode.value, mode, 'preserve the selected credential mode')
