@@ -9,6 +9,16 @@ describe('planSatisfied · 绑卡档（Pro 20x 续费）', () => {
     }
   })
 
+  it('Pro 5x 续费可用于已有订阅，显式 flow 仍优先', () => {
+    expect(planLabel('pro_5x_renew')).toBe('Pro 5x 续费')
+    expect(isCardAttachPlan(' PRO_5X_RENEW ')).toBe(true)
+    for (const current of ['pro_5x', 'prolite', 'pro_20x']) {
+      expect(planSatisfied(current, 'pro_5x_renew')).toBe(false)
+    }
+    expect(isCardAttachPlan('pro_5x_renew', 'direct')).toBe(false)
+    expect(planSatisfied('pro_5x', 'pro_5x_renew', 'direct')).toBe(true)
+  })
+
   it('后端下发了 plan_flow 时以后端为准', () => {
     expect(planSatisfied('pro_20x', 'pro_20x_renew', 'card_attach')).toBe(false)
     expect(isCardAttachPlan('unknown_key', 'card_attach')).toBe(true)

@@ -236,11 +236,17 @@ func PublicAgentCDKExchange(c *gin.Context) {
 		return
 	}
 
-	// 发一张同套餐新码（带本站选卡偏好；跳过未启动卡头）
-	var issuePrefs []cardplatform.IssueCardPref
-	if pref, ok := issuePrefFromSite(); ok {
-		issuePrefs = append(issuePrefs, pref)
+	// 原码地区未知时不能补成默认区，先从卡台确认。
+	country, known := db.LookupStoredCDKRegion(upstreamID)
+	if !known {
+		country, known = upstreamCDKRegion(c, cli, upstreamID)
 	}
+	if !known {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "无法确认原卡密的付款地区，暂不能补发，请联系管理员"})
+		return
+	}
+	pref, hasSitePref := issuePrefFromSite()
+	issuePrefs := issuePrefsWithPaymentCountry(pref, hasSitePref, country)
 
 	idem := "agent-swap-" + codeHash[:16] + "-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	var res *cardplatform.IssueCDKResult
@@ -263,7 +269,26 @@ func PublicAgentCDKExchange(c *gin.Context) {
 	if newPrefix == "" && len(newCode) >= 14 {
 		newPrefix = newCode[:14]
 	}
-	_ = db.SaveCardplatformCDKCode(newIt.ID, newCode, newPrefix, plan, newIt.FeeAmountMinor)
+	if newIt.PaymentCountry != nil {
+		if got := strings.ToUpper(strings.TrimSpace(*newIt.PaymentCountry)); got != country {
+			// 新码已产生费用：先标记人工处理以阻止重复补发，不禁用原码。
+			recordErr := db.RecordAgentCDKExchange(codeHash, upstreamID, newIt.ID, prefix, newPrefix, plan, orderID, "region_mismatch", ip)
+			saveErr := db.SaveCardplatformCDKCode(newIt.ID, newCode, newPrefix, plan, newIt.FeeAmountMinor, got)
+			log.Printf("[agent-exchange] region mismatch old=%d requested=%q new=%d actual=%q record_err=%v save_err=%v", upstreamID, country, newIt.ID, got, recordErr, saveErr)
+			db.WriteAudit("agent-swap", "agent_cdk_exchange_region_mismatch",
+				"old="+strconv.FormatInt(upstreamID, 10)+" new="+strconv.FormatInt(newIt.ID, 10)+" requested="+country+" actual="+got, ip)
+			responseStatus := http.StatusConflict
+			if recordErr != nil || saveErr != nil {
+				responseStatus = http.StatusInternalServerError
+			}
+			c.JSON(responseStatus, gin.H{
+				"error": "卡台补发的新码地区与原码不一致，请勿重试，请联系管理员核查新码", "error_code": "payment_region_mismatch",
+				"new_cdk_id": newIt.ID, "requested_country": country, "payment_country": got,
+			})
+			return
+		}
+	}
+	_ = db.SaveCardplatformCDKCode(newIt.ID, newCode, newPrefix, plan, newIt.FeeAmountMinor, country)
 
 	// 禁用旧码（防再次兑换）
 	if err := cli.DisableCDK(c.Request.Context(), upstreamID); err != nil {
@@ -275,7 +300,7 @@ func PublicAgentCDKExchange(c *gin.Context) {
 
 	_ = db.RecordAgentCDKExchange(codeHash, upstreamID, newIt.ID, prefix, newPrefix, plan, orderID, status, ip)
 	db.WriteAudit("agent-swap", "agent_cdk_exchange",
-		"old="+strconv.FormatInt(upstreamID, 10)+" new="+strconv.FormatInt(newIt.ID, 10)+" plan="+plan+" order="+strconv.FormatInt(orderID, 10),
+		"old="+strconv.FormatInt(upstreamID, 10)+" new="+strconv.FormatInt(newIt.ID, 10)+" plan="+plan+" region="+country+" order="+strconv.FormatInt(orderID, 10),
 		ip)
 
 	c.JSON(http.StatusOK, gin.H{
@@ -286,9 +311,25 @@ func PublicAgentCDKExchange(c *gin.Context) {
 		"new_cdk_id":      newIt.ID,
 		"new_code":        newCode,
 		"new_code_prefix": newPrefix,
+		"payment_country": country,
 		"order_status":    status,
 		"message":         "已换发全新卡密，请妥善保存（仅显示一次）",
 	})
+}
+
+func upstreamCDKRegion(c *gin.Context, cli *cardplatform.Client, upstreamID int64) (string, bool) {
+	res, err := cli.ListCDKsQuery(c.Request.Context(), cardplatform.CDKListQuery{Page: 1, PageSize: 50, Query: strconv.FormatInt(upstreamID, 10)})
+	if err != nil || res == nil {
+		return "", false
+	}
+	for _, it := range res.List {
+		if it.ID == upstreamID && it.PaymentCountry != nil {
+			country := strings.ToUpper(strings.TrimSpace(*it.PaymentCountry))
+			_ = db.UpdateCardplatformCDKRegion(upstreamID, country)
+			return country, true
+		}
+	}
+	return "", false
 }
 
 func parseCDKOrderList(raw json.RawMessage) (list []map[string]any, total int) {

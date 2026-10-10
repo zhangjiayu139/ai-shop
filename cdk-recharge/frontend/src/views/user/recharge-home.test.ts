@@ -297,6 +297,16 @@ describe('three-step recharge', () => {
     expect(w.get('[data-testid="confirm-redeem"]').attributes('disabled')).toBeUndefined()
   })
 
+  it('keeps Pro 5x renewal redeemable when upstream omits plan_flow', async () => {
+    request
+      .mockResolvedValueOnce(reply({ ...preview, plan: 'pro_5x_renew' }))
+      .mockResolvedValueOnce(reply({ code: 0, data: { ...preflight.data, currentPlan: 'pro_5x', subscription_has_active: true } }))
+    const w = await open(); await fill(w); await validate(w)
+    expect(w.text()).toContain('Pro 5x 续费')
+    expect(w.get('[data-testid="confirm-redeem"]').attributes('disabled')).toBeUndefined()
+    expect(request.mock.calls.some(([url]) => url.endsWith('/redeem'))).toBe(false)
+  })
+
   it('does not invent a free plan or verified account when the summary is absent', async () => {
     request.mockResolvedValueOnce(reply(preview)).mockResolvedValueOnce(reply({ code: 0, data: { preflight_token: 'test-preflight' } }))
     const w = await open(); await fill(w); await validate(w)

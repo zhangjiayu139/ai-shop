@@ -1,6 +1,9 @@
 package db
 
-import "strings"
+import (
+	"database/sql"
+	"strings"
+)
 
 // Old rows remain NULL until their current page is refreshed from CardPlatform.
 // Treating NULL as PH would mislabel old codes issued for another region.
@@ -32,4 +35,16 @@ func UpdateCardplatformCDKMetadata(upstreamID int64, status string, country *str
 	}
 	_, err := DB.Exec(`UPDATE cardplatform_cdk_codes SET payment_country = COALESCE(?, payment_country), status = CASE WHEN ? != '' THEN ? ELSE status END WHERE upstream_id = ?`, country, status, status, upstreamID)
 	return err
+}
+
+// NULL 是未知地区，只有明确的空串才表示默认区。
+func LookupStoredCDKRegion(upstreamID int64) (country string, known bool) {
+	if DB == nil || upstreamID <= 0 {
+		return "", false
+	}
+	var v sql.NullString
+	if err := DB.QueryRow(`SELECT payment_country FROM cardplatform_cdk_codes WHERE upstream_id = ? ORDER BY created_at DESC LIMIT 1`, upstreamID).Scan(&v); err != nil || !v.Valid {
+		return "", false
+	}
+	return strings.ToUpper(strings.TrimSpace(v.String)), true
 }
