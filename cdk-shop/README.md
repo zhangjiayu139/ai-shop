@@ -6,14 +6,14 @@
 
 ## 目录结构
 
-- `app/`：基于 Dujiao-Next v1.4.7 的完整源码及 TaoAi 定制修改。
+- `app/`：基于 Dujiao-Next v1.5.0 的完整源码及 TaoAi 定制修改。
 - `deploy/`：部署、备份、发布和验证脚本；运行时生成的密钥与配置不会进入仓库。
 - `assets/`：商品图片及图片生成提示词。
 - `products/`：商品资料、详情 HTML 和本地商品合同。
 - `docs/`：支付宝接入资料和部署运营交接文档。
 - `store.example.json`：不含生产密钥的店铺资料示例。
 
-上游源码基线：`dujiao-next/dujiao-next@47cc6207c6796ccfda0526a3708be39e1b59eba3`。
+上游源码基线：`dujiao-next/dujiao-next@41b86260dc9a60269526057eed8d915844ceb3a3`。
 
 ## 本地构建
 
